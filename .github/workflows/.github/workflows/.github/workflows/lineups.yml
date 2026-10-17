@@ -1,0 +1,27 @@
+name: Lineup-time run
+on:
+  workflow_dispatch: {}        # started by the Cloudflare Worker about 70 minutes before kickoffs (and by hand if you like)
+concurrency: { group: pitchlab, cancel-in-progress: false }
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements.txt
+      - run: sleep 600         # wait ~10 minutes, so it runs about 60 minutes before kickoff, after most lineups are announced
+      - run: python pipeline/run.py
+        env:
+          PITCHLAB_MODE: lineups
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          BSD_KEY: ${{ secrets.BSD_KEY }}
+          PITCHAPI_KEY: ${{ secrets.PITCHAPI_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          PIPELINE_KEY: ${{ secrets.PIPELINE_KEY }}
+          SITE_URL: ${{ vars.SITE_URL }}
