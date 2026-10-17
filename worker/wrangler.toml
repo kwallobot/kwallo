@@ -1,0 +1,21 @@
+name = "pitchlab-bot"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+# Every 15 minutes: check whether any match kicks off in about 70 minutes, and if so start a lineup-time run.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pitchlab"
+database_id = "PASTE-YOUR-D1-DATABASE-ID-HERE"
+
+[[r2_buckets]]
+binding = "DATA"
+bucket_name = "pitchlab"
+
+[vars]
+GITHUB_REPO = "YOUR-GITHUB-USERNAME/pitchlab"
+SITE_URL = ""
+# Secrets (set in the Cloudflare dashboard, never here): TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, PIPELINE_KEY, GITHUB_TOKEN
