@@ -1,0 +1,28 @@
+name: Weekly full run
+on:
+  schedule:
+    - cron: "0 3 * * 1"        # Mondays 03:00 UTC (04:00 in Lagos)
+  workflow_dispatch: {}        # also startable by hand from the Actions tab
+concurrency: { group: pitchlab, cancel-in-progress: false }
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements.txt
+      - run: python pipeline/run.py
+        env:
+          PITCHLAB_MODE: full
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          BSD_KEY: ${{ secrets.BSD_KEY }}
+          PITCHAPI_KEY: ${{ secrets.PITCHAPI_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          PIPELINE_KEY: ${{ secrets.PIPELINE_KEY }}
+          SITE_URL: ${{ vars.SITE_URL }}
