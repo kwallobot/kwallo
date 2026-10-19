@@ -11,7 +11,6 @@ jobs:
       - uses: actions/setup-python@v6
         with: { python-version: "3.11", cache: pip }
       - run: pip install -r requirements.txt
-      - run: sleep 600         # wait ~10 minutes, so it runs about 60 minutes before kickoff, after most lineups are announced
       - run: python pipeline/run.py
         env:
           PYTHONUNBUFFERED: "1"                          # v30: the log shows progress live
