@@ -83,3 +83,27 @@ From then on, everything runs by itself: the weekly full run, the daily refresh,
 **If a run fails:** open it in the Actions tab; the log names the section that failed. The site and bot keep the previous data until the next successful run. Send me the error.
 
 **If a key ever leaks:** create a new one (BotFather `/revoke` for the bot token, a new R2 token, a new GitHub token) and update the secret.
+
+---
+
+## Backups and restoring (v29)
+
+After each **weekly full run**, everything in `data/` is copied to **`backups/YYYY-MM-DD/`** in the same bucket (inside Cloudflare, so it's quick and free). The last **4 weekly** backups are kept, plus the **first backup of each of the last 6 months**; older ones are removed automatically. The public `site/` files aren't backed up, because every run rebuilds them. The bot's followers live in D1, which Cloudflare protects separately (D1 → your database → **Time Travel** restores it to any point in the last 30 days).
+
+**To restore** (only if something has gone badly wrong; ask Claude first):
+1. Pause the schedules: GitHub → **Actions** → each workflow → **⋯ → Disable workflow**.
+2. In Colab, run this (with your R2 secrets set), choosing the backup date:
+   ```python
+   !pip -q install boto3
+   import boto3
+   from google.colab import userdata
+   DATE = "2026-10-26"          # the backup to restore
+   s3 = boto3.client("s3", endpoint_url=f"https://{userdata.get('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com",
+                     aws_access_key_id=userdata.get("R2_ACCESS_KEY_ID"), aws_secret_access_key=userdata.get("R2_SECRET_ACCESS_KEY"), region_name="auto")
+   b, n = userdata.get("R2_BUCKET"), 0
+   for page in s3.get_paginator("list_objects_v2").paginate(Bucket=b, Prefix=f"backups/{DATE}/"):
+       for o in page.get("Contents", []):
+           s3.copy_object(Bucket=b, Key="data/" + o["Key"].split("/", 2)[2], CopySource={"Bucket": b, "Key": o["Key"]}); n += 1
+   print(f"Restored {n} files from {DATE}.")
+   ```
+3. Re-enable the workflows and start a **Weekly full run**.

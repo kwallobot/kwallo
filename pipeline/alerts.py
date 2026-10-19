@@ -9,6 +9,13 @@ def _subs():
     url, key = os.environ.get("WORKER_URL"), os.environ.get("PIPELINE_KEY")
     if not url or not key:
         return None
+    url = url.strip().rstrip("/")
+    while url.lower().startswith(("https://https", "http://https", "https://http")):   # v29: forgive a doubled "https://"
+        url = url.split("://", 1)[1]
+    if url.lower().startswith("https//"):
+        url = url[len("https//"):]
+    if not url.lower().startswith("http"):
+        url = "https://" + url
     r = requests.get(f"{url.rstrip('/')}/api/subscribers", headers={"X-Pipeline-Key": key}, timeout=30)
     r.raise_for_status()
     return r.json()

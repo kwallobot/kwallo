@@ -13,6 +13,8 @@ if len(PA_TACTICS):
         if not our:
             continue
         f_ = league_frame(our)
+        if f_ is None or not len(f_):
+            continue                                              # v29: this league's results didn't load this run
         mp_ = map_by_fixtures(g_.rename(columns={"date": "Date", "home": "H", "away": "A"})[["Date", "H", "A"]],
                               f_[["Date", "HomeTeam", "AwayTeam"]].rename(columns={"HomeTeam": "H", "AwayTeam": "A"}))
         for r_ in g_.itertuples():

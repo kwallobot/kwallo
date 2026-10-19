@@ -6,6 +6,13 @@ PA_OTHER_LEAGUES = {"CZE": "1. Liga", "CRO": "HNL", "SRB": "Super Liga", "ISR": 
 PA_XG_LEAGUES = {"Eredivisie": ("NED", "Eredivisie"), "Primeira Liga": ("POR", "Liga Portugal"), "Belgian Pro League": ("BEL", "First Division A"),
                  "Scottish Premiership": ("SCO", "Premiership"), "Super Lig": ("TUR", "Super Lig"), "Greek Super League": ("GRE", "Super League 1"),
                  "MLS": ("USA", "MLS"), "Saudi Pro League": ("KSA", "Saudi Pro League")}
+if INCLUDE_NEW_LEAGUES:                                          # v29
+    PA_XG_LEAGUES.update({"Liga MX": ("MEX", "Liga MX"), "Argentina Liga Profesional": ("ARG", "Liga Profesional"),
+                          "Brasileirão Série A": ("BRA", "Serie A"), "Brasileirão Série B": ("BRA", "Serie B"),
+                          "Bolivia División Profesional": ("BOL", "Primera Division"), "South African Premiership": ("RSA", "Premier Soccer League"),
+                          "Egyptian Premier League": ("EGY", "Premier League")})
+CALENDAR_COUNTRIES = {"USA", "BRA", "ARG", "BOL"}                 # seasons named by calendar year ("2026")
+EXTRA_FIXTURES = pd.DataFrame(columns=["League", "Date", "HomeTeam", "AwayTeam"])
 PITCHAPI_RUN_MINUTES = 10      # time limit per run for the expected-goals download (newest matches first; resumes next run)
 PA_TACTIC_LEAGUES = {"Premier League": ("ENG", "Premier League"), "La Liga": ("ESP", "LaLiga"), "Bundesliga": ("GER", "Bundesliga"),
                      "Serie A": ("ITA", "Serie A"), "Ligue 1": ("FRA", "Ligue 1")}
@@ -53,6 +60,8 @@ def map_by_fixtures(src, dst):
     src, dst = src.copy(), dst.copy()
     src["d"], dst["d"] = pd.to_datetime(src["Date"]).dt.normalize(), pd.to_datetime(dst["Date"]).dt.normalize()
     st_, dt_ = sorted(set(src["H"]) | set(src["A"])), sorted(set(dst["H"]) | set(dst["A"]))
+    if not st_ or not dt_:                                       # v29: nothing to link (e.g. a league that didn't load this run)
+        return {}
     sim_ = {(x, y): difflib.SequenceMatcher(None, _cl(x), _cl(y)).ratio() for x in st_ for y in dt_}
     mp, used = {}, set()
     for x in st_:
@@ -97,7 +106,7 @@ if PA_KEY:
         PA_CACHE = f"{SAVE_DIR}/pitchapi_matches.csv"
         pcache = checked_read(PA_CACHE, text=("id", "season", "label", "league"), num=("score_home", "score_away"), name="pitchapi_matches")
         if len(pcache):
-            usa_ = pcache["league"].astype(str).str.startswith("USA:")
+            usa_ = pcache["league"].astype(str).str.split(":").str[0].isin(CALENDAR_COUNTRIES)
             pcache.loc[usa_, "label"] = pcache.loc[usa_, "season"]          # v21: MLS labels are its calendar-year seasons
         done_seasons = set(zip(pcache["league"], pcache["season"])) if len(pcache) else set()
         def league_matches(country, name):
@@ -106,13 +115,15 @@ if PA_KEY:
                 return []
             lid, seasons = row["id"].iloc[0], row["seasons"].iloc[0]
             out = []
-            calendar_year = country in ("USA",)            # MLS seasons are calendar years ("2026"), labelled like our MLS data
-            for lab in (MLS_SEASONS[-3:] if calendar_year else SEASONS[-3:]):
-                s_ = (lab if lab in seasons else None) if calendar_year else next((x for x in _season_str(lab) if x in seasons), None)
+            calendar_year = country in CALENDAR_COUNTRIES   # v29: MLS, Brazil, Argentina and Bolivia name seasons by calendar year
+            cal_labels = MLS_SEASONS[-3:] if country == "USA" else [str(TODAY.year - 2), str(TODAY.year - 1), str(TODAY.year)]
+            for lab in (cal_labels if calendar_year else SEASONS[-3:]):
+                s_ = ((lab if lab in seasons else next((x for x in seasons if str(x).endswith(lab)), None)) if calendar_year
+                      else next((x for x in _season_str(lab) if x in seasons), None))
                 if s_ is None:
                     continue
                 key_ = (f"{country}:{name}", s_)
-                if key_ in done_seasons and lab != (MLS_SEASONS[-1] if calendar_year else SEASONS[-1]):
+                if key_ in done_seasons and lab != (cal_labels[-1] if calendar_year else SEASONS[-1]):
                     continue                                  # finished seasons are fetched once
                 d_ = pa(f"/v1/leagues/{lid}/matches", season=s_, status="all") or {}
                 for m_ in d_.get("matches", []):
@@ -131,6 +142,25 @@ if PA_KEY:
             pcache = pd.concat([keep_, nr], ignore_index=True).drop_duplicates("id", keep="last")
             pcache.to_csv(PA_CACHE, index=False)
         pcache["date"] = pd.to_datetime(pcache["date"])
+
+        # ---- v29: the Egyptian Premier League entirely from PitchAPI (ESPN doesn't serve it) ----
+        if INCLUDE_NEW_LEAGUES:
+            eg_ = pcache[pcache["league"] == "EGY:Premier League"].copy()
+            if len(eg_):
+                eg_["d"] = pd.to_datetime(eg_["date"]).dt.normalize()
+                fin_ = eg_[(eg_["status"] == "finished") & eg_["score_home"].notna()]
+                if len(fin_) >= 100:
+                    egy = pd.DataFrame({"League": "Egyptian Premier League", "Season": fin_["label"].astype(str), "Date": fin_["d"],
+                                        "HomeTeam": fin_["home"], "AwayTeam": fin_["away"], "FTHG": fin_["score_home"].astype(float),
+                                        "FTAG": fin_["score_away"].astype(float)}).sort_values("Date").reset_index(drop=True)
+                    for c_ in ["B365H", "B365D", "B365A", "HC", "AC", "HY", "AY", "HS", "AS"]:
+                        egy[c_] = np.nan
+                    SOLO["Egyptian Premier League"] = {"data": egy, "season": str(egy["Season"].iloc[-1]), "half_life": 180, "group": "Africa"}
+                    up_ = eg_[(eg_["status"] != "finished") & (eg_["d"] >= TODAY) & (eg_["d"] <= TODAY + pd.Timedelta(days=PREDICT_DAYS))]
+                    EXTRA_FIXTURES = pd.concat([EXTRA_FIXTURES, pd.DataFrame({"League": "Egyptian Premier League", "Date": up_["d"],
+                                                                              "HomeTeam": up_["home"], "AwayTeam": up_["away"]})], ignore_index=True)
+                    print(f"PitchAPI: Egyptian Premier League, {len(egy)} results and {len(up_)} upcoming fixtures.")
+                    health("Egyptian Premier League (PitchAPI)", True, f"{len(egy)} results, {len(up_)} upcoming")
 
         # ---- (a) domestic leagues for European clubs from countries we didn't cover ----
         other_names_ = sorted(set(euro.loc[euro["HomeLeague"] == "Other", "HomeTeam"]) | set(euro.loc[euro["AwayLeague"] == "Other", "AwayTeam"])

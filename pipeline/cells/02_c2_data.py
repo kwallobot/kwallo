@@ -131,6 +131,17 @@ mls = mls[mls["Season"].isin(MLS_SEASONS)].reset_index(drop=True)
 # Leagues predicted on their own (not from football-data's main files): their data, current season, half-life and scorecard group.
 # The Saudi Pro League is added in section 1b (from ESPN).
 SOLO = {"MLS": {"data": mls, "season": MLS_SEASONS[-1], "half_life": 180, "group": "MLS"}}
+# v29: Latin American leagues from football-data.co.uk (results and closing odds), predicted on their own like MLS
+FD_NEW_LEAGUES = {"MEX": ("Liga MX", "Americas"), "ARG": ("Argentina Liga Profesional", "Americas"), "BRA": ("Brasileirão Série A", "Americas")}
+for code_, (name_, group_) in (FD_NEW_LEAGUES.items() if INCLUDE_NEW_LEAGUES else []):
+    try:
+        d_ = load_new_format(code_, name_)
+        d_ = d_[d_["Date"] >= TODAY - pd.Timedelta(days=3 * 365 + 30)].reset_index(drop=True)
+        if len(d_) >= 200:
+            SOLO[name_] = {"data": d_, "season": str(d_["Season"].iloc[-1]), "half_life": 180, "group": group_}
+            print(f"  {name_}: {len(d_)} results since {d_['Date'].min():%b %Y}")
+    except Exception as ex_:
+        print(f"  {name_}: not available this run ({str(ex_)[:60]})")
 def league_frame(league):
     return SOLO[league]["data"] if league in SOLO else all_matches[all_matches["League"] == league]
 def league_season(league):

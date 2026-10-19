@@ -17,6 +17,8 @@ def get_fixtures():
         parts.append(nf.reindex(columns=["League", "Date", "HomeTeam", "AwayTeam"] + ODDS).assign(src=3))
     except Exception:
         pass
+    if "EXTRA_FIXTURES" in globals() and len(EXTRA_FIXTURES):                 # v29: fixtures from PitchAPI (Egypt)
+        parts.append(EXTRA_FIXTURES.reindex(columns=["League", "Date", "HomeTeam", "AwayTeam"] + ODDS).assign(src=2))
     if MANUAL_FIXTURES:
         parts.append(pd.DataFrame(MANUAL_FIXTURES, columns=["League", "Date", "HomeTeam", "AwayTeam"]).reindex(
             columns=["League", "Date", "HomeTeam", "AwayTeam"] + ODDS).assign(src=2))

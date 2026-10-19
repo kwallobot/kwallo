@@ -69,6 +69,12 @@ def main():
             traceback.print_exc()
             print("Alerts: failed this run (predictions were still exported).")
     storage.sync_up(DATA, synced)
+    if MODE == "full":
+        try:
+            storage.backup()                                      # v29: weekly backup after the full run
+        except Exception:
+            traceback.print_exc()
+            print("Backup: failed this week (the data itself is safe in data/).")
     print(f"Finished in {(time.time() - t_start) / 60:.1f} minutes" + (f"; first failure in {failed}" if failed else "."))
     if failed:
         sys.exit(1)

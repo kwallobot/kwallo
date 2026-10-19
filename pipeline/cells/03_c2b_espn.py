@@ -9,6 +9,13 @@ ESPN_LEAGUES = {"eng.1": "Premier League", "esp.1": "La Liga", "ger.1": "Bundesl
                 "sco.1": "Scottish Premiership", "tur.1": "Super Lig", "gre.1": "Greek Super League", "usa.1": "MLS"}
 if INCLUDE_SAUDI:
     ESPN_LEAGUES["ksa.1"] = "Saudi Pro League"
+if INCLUDE_NEW_LEAGUES:                                   # v29
+    ESPN_LEAGUES.update({"mex.1": "Liga MX", "arg.1": "Argentina Liga Profesional", "bra.1": "Brasileirão Série A",
+                         "bra.2": "Brasileirão Série B", "bol.1": "Bolivia División Profesional", "rsa.1": "South African Premiership",
+                         "nga.1": "NPFL (Nigeria)"})
+# leagues whose whole history comes from ESPN (name, calendar-year seasons?, scorecard group)
+ESPN_SOLO = {"bra.2": ("Brasileirão Série B", True, "Americas"), "bol.1": ("Bolivia División Profesional", True, "Americas"),
+             "rsa.1": ("South African Premiership", False, "Africa"), "nga.1": ("NPFL (Nigeria)", False, "Africa")} if INCLUDE_NEW_LEAGUES else {}
 ESPN_OTHER = ["aut.1", "den.1", "nor.1", "swe.1", "uefa.champions", "uefa.europa"]   # lineups only (rotation)
 ESPN_EXTRA_LEAGUES = {"aut.1": "Austrian Bundesliga", "den.1": "Danish Superliga", "nor.1": "Eliteserien", "swe.1": "Allsvenskan"}
 EURO_CODES = {"uefa.champions": "Champions League", "uefa.europa": "Europa League"}
@@ -263,6 +270,25 @@ if INCLUDE_SAUDI:
         health("Saudi Pro League (ESPN)", len(saudi) > 0, f"{len(saudi)} results, latest {saudi['Date'].max():%d %b}")
         print("  Saudi Pro League results by season (matches, with odds):", ", ".join(f"{i}: {r_.Matches} ({r_.With_odds})" for i, r_ in by_season.iterrows()))
 
+for code_, (name_, calendar_, group_) in ESPN_SOLO.items():
+    try:
+        r_ = espn_league_results(code_, pd.Timestamp(f"20{SEASONS[-2][:2]}-07-01"))
+        done_ = r_[r_["completed"]].dropna(subset=["FTHG", "FTAG"]) if len(r_) else r_
+        if len(done_) >= 100:
+            lab_ = done_["Date"].dt.year.astype(str) if calendar_ else done_["Date"].map(season_label)
+            dd_ = pd.DataFrame({"League": name_, "Season": lab_, "Date": done_["Date"], "HomeTeam": done_["HomeTeam"], "AwayTeam": done_["AwayTeam"],
+                                "FTHG": done_["FTHG"], "FTAG": done_["FTAG"], "B365H": done_["B365H"], "B365D": done_["B365D"], "B365A": done_["B365A"]}
+                               ).sort_values("Date").reset_index(drop=True)
+            for c_ in ["HC", "AC", "HY", "AY", "HS", "AS"]:
+                dd_[c_] = np.nan
+            SOLO[name_] = {"data": dd_, "season": str(TODAY.year) if calendar_ else season_label(TODAY), "half_life": 180, "group": group_}
+            health(f"{name_} (ESPN)", True, f"{len(dd_)} results, latest {dd_['Date'].max():%d %b}")
+            print(f"  {name_}: {len(dd_)} results from ESPN since {dd_['Date'].min():%b %Y}")
+        else:
+            health(f"{name_} (ESPN)", False, f"only {len(done_)} results so far")
+    except Exception as ex_:
+        health(f"{name_} (ESPN)", False, f"failed: {str(ex_)[:60]}")
+
 lu, links, espn_fx, fpl_out = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 other_dom, other_sched, other_names = pd.DataFrame(columns=["League", "Season", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"]), pd.DataFrame(), {}
 team_map = {}
@@ -289,9 +315,9 @@ if PLAYER_MODEL or EURO_SOURCE == "espn":
     ev = ev_.pivot_table(index=["comp", "event_id", "date"], columns="side", values="team", aggfunc="first").reset_index().dropna(subset=["home", "away"])
     ev = ev.merge(ev_.pivot_table(index="event_id", columns="side", values="team_id", aggfunc="first")
                      .rename(columns={"home": "home_id", "away": "away_id"}), left_on="event_id", right_index=True)
-    fd_all = pd.concat([all_matches[["League", "Date", "HomeTeam", "AwayTeam"]], mls[["League", "Date", "HomeTeam", "AwayTeam"]],
+    fd_all = pd.concat([all_matches[["League", "Date", "HomeTeam", "AwayTeam"]]] + [i_["data"][["League", "Date", "HomeTeam", "AwayTeam"]] for i_ in SOLO.values()] + [
                         extra_matches[["League", "Date", "HomeTeam", "AwayTeam"]]]
-                       + ([saudi[["League", "Date", "HomeTeam", "AwayTeam"]]] if len(saudi) else []), ignore_index=True)
+                       , ignore_index=True)          # (the Saudi league is already among the solo leagues)
     link_parts = []
     for code, league in {**ESPN_LEAGUES, **ESPN_EXTRA_LEAGUES}.items():
         e = ev[ev["comp"] == code]

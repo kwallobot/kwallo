@@ -65,3 +65,38 @@ def put_public(key, body, content_type="application/json"):
         return False
     c.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type, CacheControl="public, max-age=120")
     return True
+
+def backup(prefix="data/", keep_weekly=4, keep_monthly=6):
+    """v29: copy data/ into backups/YYYY-MM-DD/ inside the bucket (a server-side copy: nothing is downloaded), then keep the
+    last few weekly backups plus the first backup of each of the last few months, deleting older ones."""
+    import datetime
+    c, bucket = _client()
+    if c is None:
+        print("Backup: skipped (no R2 settings).")
+        return
+    today = datetime.date.today().isoformat()
+    n = 0
+    for page in c.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for o in page.get("Contents", []):
+            c.copy_object(Bucket=bucket, Key=f"backups/{today}/{o['Key'][len(prefix):]}", CopySource={"Bucket": bucket, "Key": o["Key"]})
+            n += 1
+    dates = set()
+    for page in c.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="backups/", Delimiter="/"):
+        for p in page.get("CommonPrefixes", []):
+            dates.add(p["Prefix"].split("/")[1])
+    dates = sorted(dates)
+    keep = set(dates[-keep_weekly:])
+    first_of_month = {}
+    for d in dates:
+        first_of_month.setdefault(d[:7], d)
+    keep |= set(sorted(first_of_month.values())[-keep_monthly:])
+    removed = 0
+    for d in dates:
+        if d in keep:
+            continue
+        for page in c.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"backups/{d}/"):
+            objs = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+            for i in range(0, len(objs), 1000):
+                c.delete_objects(Bucket=bucket, Delete={"Objects": objs[i:i + 1000]})
+        removed += 1
+    print(f"Backup: {n} files copied to backups/{today}/; keeping {len(keep)} backups ({', '.join(sorted(keep))}); {removed} older ones removed.")

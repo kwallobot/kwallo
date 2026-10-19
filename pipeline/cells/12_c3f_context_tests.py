@@ -140,6 +140,34 @@ if "base" in globals() and len(base) and TEST_GOAL_LEVEL_AND_REST:
     CTX2["team_hfa"] = bool(pct >= 95 and d_.mean() < 0)
     ctx2_report.append({"Factor": "Team-specific home advantage", "Change in log loss": float(d_.mean()) if te_.sum() else np.nan,
                         "Better in % of reshuffles": float(pct), "Result": "ON" if CTX2["team_hfa"] else "off"})
+    # v29: team-by-team home advantage for leagues where it's known to be extreme (Bolivia's altitude, the NPFL),
+    # learned on each league's earlier matches, checked on its later ones, and used only for that league if it passes
+    CTX2["team_hfa_leagues"], CTX2["team_hfa_league_values"] = {}, {}
+    for lg_ in ["Bolivia División Profesional", "NPFL (Nigeria)"]:
+        sub_ = bb[bb["League"] == lg_].sort_values("Date").reset_index(drop=True)
+        if len(sub_) < 200:
+            ctx2_report.append({"Factor": f"Home advantage by team: {lg_}", "Result": f"not enough replayed matches yet ({len(sub_)})"})
+            continue
+        cut_ = sub_["Date"].quantile(0.6)
+        early_, late_ = sub_[sub_["Date"] < cut_], sub_[sub_["Date"] >= cut_].reset_index(drop=True)
+        hf_ = team_hfa(early_)
+        o_l = outcome(late_)
+        def ll_l(mh, ma):
+            p_ = np.zeros((len(late_), 3))
+            for r_v in np.unique(late_["rho"].values):
+                i_ = np.where(late_["rho"].values == r_v)[0]
+                p_[i_] = outcome_probs(mh[i_], ma[i_], r_v)
+            return -np.log(np.clip(p_[np.arange(len(late_)), o_l], 1e-9, 1))
+        a_ = np.array([hf_.get(t_, (0, 0))[0] for t_ in late_["HomeTeam"]]); b_ = np.array([hf_.get(t_, (0, 0))[1] for t_ in late_["HomeTeam"]])
+        d_ = ll_l(late_["ExpHome"].values * np.exp(a_), late_["ExpAway"].values * np.exp(b_)) - ll_l(late_["ExpHome"].values, late_["ExpAway"].values)
+        pct_ = share2(d_)
+        ok_ = bool(pct_ >= 95 and d_.mean() < 0)
+        if ok_:
+            CTX2["team_hfa_leagues"][lg_] = True
+            CTX2["team_hfa_league_values"][lg_] = {k: list(v) for k, v in team_hfa(sub_).items()}
+        ctx2_report.append({"Factor": f"Home advantage by team: {lg_}", "Change in log loss": float(d_.mean()), "Better in % of reshuffles": float(pct_),
+                            "Result": "ON (this league only)" if ok_ else "off"})
+
     # motivation: late-season stakes, tested on last season's run-in (earlier half of the run-in vs later half)
     late = bb[(bb["Date"] < season_start) & (bb["Date"] >= season_start - pd.Timedelta(days=150))]
     lab_ = pd.concat([league_frame(l_)[["League", "Date", "HomeTeam", "AwayTeam", "Season"]] for l_ in late["League"].unique()], ignore_index=True)
@@ -197,7 +225,7 @@ def ctx2_multipliers(games):
     """Goal multipliers from the context factors that passed their tests."""
     n_ = len(games)
     fh, fa = np.ones(n_), np.ones(n_)
-    if not n_ or not any(CTX2.get(k) for k in ["derby", "weather", "team_hfa", "motivation"]):
+    if not n_ or not any(CTX2.get(k) for k in ["derby", "weather", "team_hfa", "motivation", "team_hfa_league_values"]):
         return fh, fa
     cx_ = ctx_lookup(games)
     if CTX2.get("derby"):
@@ -207,6 +235,11 @@ def ctx2_multipliers(games):
         wx_ = weather_x(cx_)
         f_ = np.exp(sum(CTX2["weather"][k] * wx_[k] for k in CTX2["weather"]))
         fh *= f_; fa *= f_
+    for lg_, vals_ in (CTX2.get("team_hfa_league_values") or {}).items():          # v29: league-specific (Bolivia, NPFL)
+        in_ = (games["League"] == lg_).values if "League" in games else np.zeros(n_, bool)
+        if in_.any():
+            fh *= np.where(in_, np.exp([vals_.get(t_, [0, 0])[0] for t_ in games["HomeTeam"]]), 1.0)
+            fa *= np.where(in_, np.exp([vals_.get(t_, [0, 0])[1] for t_ in games["HomeTeam"]]), 1.0)
     if CTX2.get("team_hfa") and CTX2.get("team_hfa_values"):
         tv = CTX2["team_hfa_values"]
         fh *= np.exp([tv.get(t_, [0, 0])[0] for t_ in games["HomeTeam"]]); fa *= np.exp([tv.get(t_, [0, 0])[1] for t_ in games["HomeTeam"]])
