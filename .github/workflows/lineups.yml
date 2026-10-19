@@ -27,3 +27,4 @@ jobs:
           PIPELINE_KEY: ${{ secrets.PIPELINE_KEY }}
           SITE_URL: ${{ vars.SITE_URL }}
           TELEGRAM_CHANNEL: ${{ vars.TELEGRAM_CHANNEL }}
+          PREMIUM_ENABLED: ${{ vars.PREMIUM_ENABLED }}
