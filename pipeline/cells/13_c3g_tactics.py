@@ -124,9 +124,9 @@ def ml_features(df):
     rf_ = rest_flags(d_)
     for k_, v_ in rf_.items():
         X[k_] = v_
-    cx_ = ctx_lookup(d_)
+    cx_ = ctx_lookup(d_) if "ctx_lookup" in globals() else pd.DataFrame({"derby": [False] * len(d_)}, index=d_.index)   # v31: context section not run
     X["derby"] = cx_["derby"].fillna(False).astype(float).values
-    for k_, v_ in weather_x(cx_).items():
+    for k_, v_ in (weather_x(cx_).items() if "weather_x" in globals() else []):
         X[k_] = v_
     X["h_new_mgr"], X["a_new_mgr"] = new_manager(d_["HomeTeam"], d_["Date"]), new_manager(d_["AwayTeam"], d_["Date"])
     th_, ta_ = _tac_lookup(d_["HomeTeam"], d_["Date"]), _tac_lookup(d_["AwayTeam"], d_["Date"])

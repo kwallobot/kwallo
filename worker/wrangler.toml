@@ -4,7 +4,7 @@ compatibility_date = "2025-06-01"
 
 # Every 15 minutes: check whether any match kicks off in about 70 minutes, and if so start a lineup-time run.
 [triggers]
-crons = ["*/15 * * * *"]
+crons = ["* * * * *"]
 
 [[d1_databases]]
 binding = "DB"

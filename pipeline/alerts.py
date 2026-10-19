@@ -4,6 +4,19 @@ official lineups are out, about 75 minutes before kickoff in the Premier League)
 Informational only: probabilities and fair odds, no bookmakers."""
 import os, json, time, html
 import requests, pandas as pd
+PREMIUM_ENABLED = os.environ.get("PREMIUM_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")   # v31: off until premium launches
+
+def _stat(metric, n):
+    """v31: daily totals for /stats in the bot (counts only, nothing about individuals)."""
+    url, key = os.environ.get("WORKER_URL"), os.environ.get("PIPELINE_KEY")
+    if not url or not key or not n:
+        return
+    try:
+        url = url.strip().rstrip("/")
+        url = url if url.lower().startswith("http") else "https://" + url
+        requests.post(f"{url}/api/stats", headers={"X-Pipeline-Key": key}, json={"metric": metric, "n": int(n)}, timeout=15)
+    except Exception:
+        pass
 
 def _subs():
     url, key = os.environ.get("WORKER_URL"), os.environ.get("PIPELINE_KEY")
@@ -41,7 +54,7 @@ def preview_text(d, site):
     lines = [f"<b>{html.escape(m['Home'])} v {html.escape(m['Away'])}</b> · {html.escape(m['Competition'])}",
              f"Kickoff: {m['kickoff'][11:16] + ' UTC' if m.get('kickoff') else m['Date'][:10]}",
              f"Chances: {html.escape(m['Home'])} {_pct(m.get('pH'))} · draw {_pct(m.get('pD'))} · {html.escape(m['Away'])} {_pct(m.get('pA'))}"]
-    if v.get("best"):
+    if v.get("best") and not PREMIUM_ENABLED:                     # v31: the top angle is premium once premium launches
         b = v["best"][0]
         lines.append(f"Top angle: {html.escape(b['Bet'])} ({_pct(b['p'])}, worth it at {b['fair']:.2f} or better)")
     xi = d.get("expected_xi")
@@ -59,7 +72,7 @@ def lineups_text(d, site):
         e = (d.get("expected_xi") or {}).get(s) or {}
         lines.append(f"{html.escape(t)}{' (confirmed)' if e.get('confirmed') else ' (expected)'}: {html.escape(_xi_line(d.get('expected_xi'), s))}")
     lines.append(f"Updated chances: {html.escape(m['Home'])} {_pct(m.get('pH'))} · draw {_pct(m.get('pD'))} · {html.escape(m['Away'])} {_pct(m.get('pA'))}")
-    if v.get("best"):
+    if v.get("best") and not PREMIUM_ENABLED:                     # v31: the top angle is premium once premium launches
         b = v["best"][0]
         lines.append(f"Top angle now: {html.escape(b['Bet'])} ({_pct(b['p'])}, worth it at {b['fair']:.2f} or better)")
     if m.get("kickoff"):
@@ -113,6 +126,7 @@ def send(ns, data_dir, mode):
     sent = {k: v for k, v in sent.items() if pd.Timestamp(v) > now - pd.Timedelta(days=21)}   # keep the log small
     json.dump(sent, open(log_path, "w"))
     print(f"Alerts: {n_sent} messages sent to followers.")
+    _stat("alerts_pipeline", n_sent)
 
 
 # ---------- v30: the public Kwallo channel (@kwallo_official) ----------
@@ -127,6 +141,21 @@ def _post(token, channel, text, sent, key):
     if ok:
         sent[key] = pd.Timestamp.now("UTC").tz_convert(None).isoformat()
     return ok
+
+def _free_pick(m, data_dir):
+    """v31 (premium on): a pick for free users that is never the match's top angle: its second-best angle, else its safer angle."""
+    try:
+        d = json.load(open(os.path.join(data_dir, "site", "match", f"{m['slug']}.json")))
+    except Exception:
+        return None
+    v = d.get("verdict") or {}
+    best, safer = v.get("best") or [], v.get("safer")
+    top = best[0]["Bet"] if best else None
+    if len(best) > 1:
+        return best[1]
+    if safer and safer.get("Bet") != top:
+        return safer
+    return None
 
 def channel_posts(data_dir, mode):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -146,7 +175,7 @@ def channel_posts(data_dir, mode):
     # 1. morning digest: today's matches with their top angle (grouped by competition, capped so it fits one message)
     todays = [m for m in idx["matches"] if m["Date"][:10] == today]
     if todays:
-        lines = [f"☀️ <b>Kwallo · {now:%A %d %B}</b>", "<i>football, decoded.</i> Today's top angles, with fair odds:", ""]
+        lines = [f"☀️ <b>Kwallo · {now:%A %d %B}</b>", ("<i>football, decoded.</i> Today's chances, with a free pick for each match:" if PREMIUM_ENABLED else "<i>football, decoded.</i> Today's top angles, with fair odds:"), ""]
         by_comp = {}
         for m in sorted(todays, key=lambda m: (m["Competition"] not in BIG_COMPS, m.get("kickoff") or "", m["Competition"])):
             by_comp.setdefault(m["Competition"], []).append(m)
@@ -158,7 +187,12 @@ def channel_posts(data_dir, mode):
             for m in ms[:6]:
                 tp = m.get("top_pick") or {}
                 ko = f"{m['kickoff'][11:16]} " if m.get("kickoff") else ""
-                lines.append(f"{ko}{html.escape(m['Home'])} v {html.escape(m['Away'])}" + (f": {html.escape(tp['Bet'])} {_pct(tp['p'])} (fair {tp['fair']:.2f})" if tp else ""))
+                if PREMIUM_ENABLED:                                    # v31: basic chances plus one non-top pick per match
+                    fp = _free_pick(m, data_dir)
+                    lines.append(f"{ko}{html.escape(m['Home'])} v {html.escape(m['Away'])}: {_pct(m.get('pH'))} · draw {_pct(m.get('pD'))} · {_pct(m.get('pA'))}"
+                                 + (f" · <i>Pick:</i> {html.escape(fp['Bet'])} {_pct(fp['p'])} (fair {fp['fair']:.2f})" if fp else ""))
+                else:
+                    lines.append(f"{ko}{html.escape(m['Home'])} v {html.escape(m['Away'])}" + (f": {html.escape(tp['Bet'])} {_pct(tp['p'])} (fair {tp['fair']:.2f})" if tp else ""))
                 shown += 1
             lines.append("")
         lines.append("<i>Model probabilities, not guarantees. Worth it only above the fair odds. 18+.</i>")
@@ -200,3 +234,4 @@ def channel_posts(data_dir, mode):
     sent = {k: s for k, s in sent.items() if pd.Timestamp(s) > now - pd.Timedelta(days=30)}
     json.dump(sent, open(log_path, "w"))
     print(f"Channel {channel}: {n} posts this run.")
+    _stat("channel_posts", n)

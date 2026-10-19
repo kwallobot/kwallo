@@ -112,3 +112,10 @@ After each **weekly full run**, everything in `data/` is copied to **`backups/YY
 ## The public channel (v30)
 
 The runs post to **@kwallo_official** by default (the bot must be an administrator there with "Post Messages"). To use a different channel, add a GitHub **variable** (not a secret): project → Settings → Secrets and variables → Actions → **Variables** tab → `TELEGRAM_CHANNEL` = `@yourchannel`.
+
+
+## v31: live alerts, /stats and the premium switch
+
+1. **Cloudflare → your Worker → Settings → Trigger Events:** change the cron from `*/15 * * * *` to **`* * * * *`** (every minute). The Worker now checks followed matches every minute, and still starts lineup-time runs every 15 minutes.
+2. **/stats:** send `/stats` to the bot once. It replies with your chat ID; add it as a Worker **secret** named `ADMIN_CHAT_ID`, then `/stats` shows your figures (only to you).
+3. **The premium switch:** nothing to do until premium launches. On launch day, add a GitHub **variable** `PREMIUM_ENABLED` = `1` (Settings → Secrets and variables → Actions → Variables). Free alerts then carry basic chances only, and the morning digest shows one non-top pick per match.

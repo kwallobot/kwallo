@@ -13,7 +13,7 @@ def est_k(y, mu):
 def band_check(name, p, y, dates):
     """Isotonic correction learned on the earlier half, checked on the later half (same rule as the player probabilities)."""
     p, y, dates = np.asarray(p, float), np.asarray(y, float), np.asarray(dates)
-    ok_ = np.isfinite(p) & np.isfinite(y); p, y, dates = p[ok_], y[ok_], dates[ok_]
+    ok_ = np.isfinite(p) & np.isfinite(y); p, y, dates = p[ok_], y[ok_], dates[ok_]      # v31: skip incomplete matches
     r_ = calibrate_player(name, p, y, dates, min_cases=500) if len(p) >= 500 else _small_check(name, p, y)
     MARKET_TRUST[name] = r_
     if r_.get("table"):
@@ -321,7 +321,7 @@ if RUN_REPLAYS:
 def count_market(stat_, label_, family_):
     if "COUNT_LONG" not in globals() or not len(COUNT_LONG):
         return
-    cl_ = COUNT_LONG[COUNT_LONG["stat"] == stat_].copy()
+    cl_ = COUNT_LONG[COUNT_LONG["stat"] == stat_].dropna(subset=["own", "against"]).copy()     # v31: matches missing the count
     if len(cl_) < 600:
         print(f"{label_.capitalize()}: {len(cl_)} team-matches so far; the market needs about 600 to be tested.")
         return

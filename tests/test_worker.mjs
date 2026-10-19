@@ -5,7 +5,8 @@ const db = new DatabaseSync(":memory:");
 db.exec(fs.readFileSync(new URL("../worker/schema.sql", import.meta.url), "utf8"));
 const D1 = { prepare(sql) { let args = []; const st = { bind(...a) { args = a; return st; },
   async run() { db.prepare(sql).run(...args); return {}; }, async all() { return { results: db.prepare(sql).all(...args) }; },
-  async first() { return db.prepare(sql).get(...args) || null; } }; return st; } };
+  async first() { return db.prepare(sql).get(...args) || null; }, _run() { db.prepare(sql).run(...args); } }; return st; },
+             async batch(list) { for (const s of list) s._run(); return []; } };
 const files = { "site/teams.json": [{ slug: "arsenal", name: "Arsenal", league: "Premier League", league_slug: "premier-league" },
                                     { slug: "man-city", name: "Man City", league: "Premier League", league_slug: "premier-league" },
                                     { slug: "man-united", name: "Man United", league: "Premier League", league_slug: "premier-league" }],

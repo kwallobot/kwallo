@@ -182,3 +182,62 @@ if _BK:
                       f"{len(cup_results)} cup results, {len(cup_fixtures)} upcoming cup ties, {len(REF_STATS)} referees")
         print(f"  {CTX_STATUS}; referees already appointed for {n_ref_up} upcoming matches.")
 health("BSD context (cups, weather, derbies, referees)", _BK is not None and "not used" not in CTX_STATUS, CTX_STATUS)
+
+# ---------- v31: the NPFL's current season from BSD (ESPN stopped after May 2026); history before that stays from ESPN ----------
+NPFL_BSD_LEAGUE = 28
+if INCLUDE_NEW_LEAGUES and _BK:
+    import unicodedata as _ud2, difflib as _dl2
+    try:
+        season_start = pd.Timestamp(f"{TODAY.year if TODAY.month >= 7 else TODAY.year - 1}-07-01")
+        rows_, url_, params_ = [], "/api/v2/events/", {"league": NPFL_BSD_LEAGUE, "date_from": f"{season_start:%Y-%m-%d}",
+                                                      "date_to": f"{TODAY + pd.Timedelta(days=PREDICT_DAYS):%Y-%m-%d}", "limit": 200}
+        for _ in range(10):                                    # follow the pages
+            js_ = _bsd(url_, **params_) if params_ else _bsd(url_)
+            if not js_:
+                break
+            rows_ += js_.get("results", []) if isinstance(js_, dict) else js_
+            url_, params_ = (js_.get("next"), None) if isinstance(js_, dict) and js_.get("next") else (None, None)
+            if not url_:
+                break
+        ev_ = pd.DataFrame([{"Date": pd.Timestamp(e_.get("event_date") or e_.get("date")).tz_convert(None).normalize(), "home": e_.get("home_team"),
+                             "away": e_.get("away_team"), "status": str(e_.get("status")).lower(), "hs": e_.get("home_score"), "as_": e_.get("away_score")}
+                            for e_ in rows_ if (e_.get("event_date") or e_.get("date"))])
+        name_ = "NPFL (Nigeria)"
+        hist_ = SOLO[name_]["data"] if name_ in SOLO else pd.DataFrame(columns=["League", "Season", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"])
+        hist_ = hist_[hist_["Date"] < season_start]
+        # BSD's club names -> the names in ESPN's history (accent-free spelling, one-to-one, clear matches only)
+        _stop2 = {"fc", "club", "football", "the", "international", "int"}
+        def _cn2(x):
+            w_ = _ud2.normalize("NFKD", str(x)).encode("ascii", "ignore").decode().lower().replace("-", " ").replace(".", " ").split()
+            return "".join(t for t in w_ if t not in _stop2) or "".join(w_)
+        known_ = sorted(set(hist_["HomeTeam"]) | set(hist_["AwayTeam"])) if len(hist_) else []
+        bsd_names = sorted(set(ev_["home"].dropna()) | set(ev_["away"].dropna())) if len(ev_) else []
+        npfl_map, used_ = {}, set()
+        for b_ in bsd_names:
+            cb = _cn2(b_)
+            sc_ = sorted(((1.0 if cb == _cn2(k_) else (0.92 if min(len(cb), len(_cn2(k_))) >= 4 and (cb in _cn2(k_) or _cn2(k_) in cb)
+                           else _dl2.SequenceMatcher(None, cb, _cn2(k_)).ratio()), k_) for k_ in known_ if k_ not in used_), reverse=True)
+            if sc_ and sc_[0][0] >= 0.85 and (len(sc_) < 2 or sc_[0][0] - sc_[1][0] >= 0.05):
+                npfl_map[b_] = sc_[0][1]; used_.add(sc_[0][1])
+        if len(ev_):
+            ev_["HomeTeam"] = ev_["home"].map(lambda t: npfl_map.get(t, t)); ev_["AwayTeam"] = ev_["away"].map(lambda t: npfl_map.get(t, t))
+            fin_ = ev_[ev_["status"].isin(["finished", "ft", "ended"]) & ev_["hs"].notna() & ev_["as_"].notna()]
+            cur_ = pd.DataFrame({"League": name_, "Season": fin_["Date"].map(season_label), "Date": fin_["Date"], "HomeTeam": fin_["HomeTeam"],
+                                 "AwayTeam": fin_["AwayTeam"], "FTHG": fin_["hs"].astype(float), "FTAG": fin_["as_"].astype(float)})
+            for c_ in ["B365H", "B365D", "B365A", "HC", "AC", "HY", "AY", "HS", "AS"]:
+                cur_[c_] = np.nan
+            allr_ = pd.concat([hist_, cur_], ignore_index=True).drop_duplicates(["Date", "HomeTeam", "AwayTeam"]).sort_values("Date").reset_index(drop=True)
+            if len(allr_) >= 100:
+                SOLO[name_] = {"data": allr_, "season": season_label(TODAY), "half_life": 180, "group": "Africa"}
+            up_ = ev_[(ev_["status"].isin(["notstarted", "scheduled"])) & (ev_["Date"] >= TODAY) & (ev_["Date"] <= TODAY + pd.Timedelta(days=PREDICT_DAYS))]
+            if "EXTRA_FIXTURES" not in globals():
+                EXTRA_FIXTURES = pd.DataFrame(columns=["League", "Date", "HomeTeam", "AwayTeam"])
+            EXTRA_FIXTURES = pd.concat([EXTRA_FIXTURES, pd.DataFrame({"League": name_, "Date": up_["Date"], "HomeTeam": up_["HomeTeam"], "AwayTeam": up_["AwayTeam"]})],
+                                       ignore_index=True)
+            new_clubs = sorted((set(cur_["HomeTeam"]) | set(cur_["AwayTeam"])) - set(known_))
+            print(f"NPFL from BSD: {len(cur_)} results this season, {len(up_)} upcoming fixtures; names matched: "
+                  + ", ".join(f"{b} -> {k}" for b, k in npfl_map.items() if b != k)[:600]
+                  + (f"; new to the data (promoted, or a name to check): {', '.join(new_clubs)}" if new_clubs else ""))
+            health("NPFL (BSD, this season)", len(cur_) > 0, f"{len(cur_)} results, latest {cur_['Date'].max():%d %b}" if len(cur_) else "no results yet")
+    except Exception as ex_:
+        health("NPFL (BSD, this season)", False, f"failed: {str(ex_)[:60]}")

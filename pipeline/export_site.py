@@ -48,6 +48,18 @@ def export(ns, data_dir, mode):
         for r in fx.itertuples():
             kick[(r.League, str(r.Date)[:10], r.HomeTeam, r.AwayTeam)] = pd.Timestamp(r.Kickoff).strftime("%Y-%m-%dT%H:%M:%SZ")
     get = lambda name, k: (P.get(name) or {}).get("|".join(k))
+    # v31: ESPN identifiers for each fixture, so the Worker can follow it live
+    espn_ids = {}
+    if fx is not None and len(fx) and "event_id" in fx:
+        for r in fx.itertuples():
+            espn_ids[(r.League, str(r.Date)[:10], r.HomeTeam, r.AwayTeam)] = (r.code, str(r.event_id))
+    eu = ns.get("euro_up")
+    inv_codes = {v: k for k, v in (ns.get("EURO_CODES") or {}).items()}
+    if eu is not None and len(eu) and "event_id" in eu:
+        for r in eu.itertuples():
+            c_ = inv_codes.get(getattr(r, "Competition", None))
+            if c_:
+                espn_ids[(r.Competition, str(r.Date)[:10], r.HomeTeam, r.AwayTeam)] = (c_, str(r.event_id))
     matches, details, teams = [], {}, {}
     for m in P.get("predictions", []):
         k = (m["Competition"], str(m["Date"])[:10], m["Home"], m["Away"])
@@ -57,10 +69,11 @@ def export(ns, data_dir, mode):
         row = clean({**{c: m.get(c) for c in ["Competition", "Group", "Date", "Home", "Away", "pH", "pD", "pA", "pBTTS", "pOver25", "ExpHome", "ExpAway",
                                                "ExpCards", "ExpCardsH", "ExpCardsA", "pOverCards", "ExpCorners", "pOverCorners", "Note", "Absent", "Grid"]},
                      "slug": ms, "kickoff": kick.get(k), "league_slug": slug(k[0]), "home_slug": slug(k[2]), "away_slug": slug(k[3]),
+                     "espn": dict(zip(["code", "id"], espn_ids[k])) if k in espn_ids else None,
                      "fair": {o: (1 / m[p] if m.get(p) else None) for o, p in [("H", "pH"), ("D", "pD"), ("A", "pA")]},
                      "top_pick": (v.get("best") or [None])[0] if v else None,
                      "confirmed": {s: bool((xi.get(s) or {}).get("confirmed")) for s in ("home", "away")}})
-        matches.append({x: row[x] for x in ["slug", "Competition", "league_slug", "Date", "kickoff", "Home", "Away", "home_slug", "away_slug",
+        matches.append({x: row.get(x) for x in ["slug", "Competition", "league_slug", "Date", "kickoff", "Home", "Away", "home_slug", "away_slug", "espn",
                                             "pH", "pD", "pA", "fair", "pBTTS", "pOver25", "top_pick", "confirmed"]})
         details[ms] = clean({"match": row, "verdict": v, "markets": get("markets", k), "expected_xi": xi, "last_time": get("last_time", k),
                              "scorers": get("scorers", k), "trends": {"home": (P.get("trends") or {}).get(k[2]), "away": (P.get("trends") or {}).get(k[3])},
@@ -81,6 +94,8 @@ def export(ns, data_dir, mode):
                   "bet_history": P.get("bet_history"), "xi_accuracy": P.get("xi_acc"), "edge": P.get("edge")})
     files = {"site/index.json": {"meta": meta, "matches": matches}, "site/teams.json": sorted(teams.values(), key=lambda t: t["name"]),
              "site/schedule.json": [{"slug": m["slug"], "kickoff": m["kickoff"], "date": m["Date"][:10], "competition": m["Competition"],
+                                     "league_slug": m["league_slug"], "home_slug": m["home_slug"], "away_slug": m["away_slug"], "espn": m.get("espn"),
+                                     "pH": m.get("pH"), "pD": m.get("pD"), "pA": m.get("pA"),
                                      "home": m["Home"], "away": m["Away"]} for m in matches]}
     for ms, d in details.items():
         files[f"site/match/{ms}.json"] = d
