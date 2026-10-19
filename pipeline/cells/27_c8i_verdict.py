@@ -27,7 +27,7 @@ def evidence(family):
         return "no proven edge in testing" if _edge.get("corners", 0) < 2 else "small edge in testing"
     if family == "scorer":
         return "well calibrated in testing; value untested (no odds)" if scorer_calibration.get("trusted") else "experimental"
-    if family in ("shots", "sot", "fouls", "halftime", "halftime_both", "timing", "penalty", "player_props", "first_scorer"):
+    if family in ("shots", "sot", "fouls", "halftime", "halftime_both", "timing", "penalty", "player_props", "first_scorer", "offsides", "tackles", "throwins"):
         return "well calibrated in testing; value untested (no odds)"
     if family == "assister":
         return "well calibrated in testing; value untested (no odds)" if assist_calibration.get("trusted") else "experimental"
@@ -161,6 +161,13 @@ def settle(r_):
                 return np.nan
             hg, ag = ht_["HTHG"].iloc[0], ht_["HTAG"].iloc[0]
             return float({"HT_D": hg == ag, "HT_H": hg > ag, "BOTHHALVES": (hg + ag > 0) and (h + a - hg - ag > 0)}[c_[0]])
+        if c_[0] == "CNT" and "COUNT_LONG" in globals() and len(COUNT_LONG):        # v30: offsides and tackles
+            t_ = COUNT_LONG[(COUNT_LONG["stat"] == c_[1]) & (COUNT_LONG["Team"] == r_["Home"]) & (COUNT_LONG["is_home"] == 1)
+                            & ((COUNT_LONG["Date"] - pd.Timestamp(r_["Date"])).abs() <= pd.Timedelta(days=1))]
+            if not len(t_):
+                return np.nan
+            val_ = {"tot": t_["own"].iloc[0] + t_["against"].iloc[0], "home": t_["own"].iloc[0], "away": t_["against"].iloc[0]}[c_[2]]
+            return float(val_ > float(c_[3]))
         if c_[0] == "THROW" and "THROW_LONG" in globals() and len(THROW_LONG):
             t_ = THROW_LONG[(THROW_LONG["Team"] == r_["Home"]) & (THROW_LONG["is_home"] == 1) & ((THROW_LONG["Date"] - pd.Timestamp(r_["Date"])).abs() <= pd.Timedelta(days=1))]
             return float(t_["own"].iloc[0] + t_["against"].iloc[0] > float(c_[1])) if len(t_) else np.nan

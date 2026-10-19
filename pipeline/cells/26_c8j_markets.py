@@ -315,5 +315,105 @@ if "THROW_LONG" in globals() and len(THROW_LONG) >= 600 and "League" in THROW_LO
 if RUN_REPLAYS:
     json.dump({"trust": {k: {kk: vv for kk, vv in v.items() if kk != "table"} for k, v in MARKET_TRUST.items()}, "cal": PLAYER_CAL},
               open(MT_PATH, "w"), default=float)
+# ---------- 5. v30: offsides and tackles (team counts from PitchAPI and ESPN): total and each team, each league's own line ----------
+def count_market(stat_, label_, family_):
+    if "COUNT_LONG" not in globals() or not len(COUNT_LONG):
+        return
+    cl_ = COUNT_LONG[COUNT_LONG["stat"] == stat_].copy()
+    if len(cl_) < 600:
+        print(f"{label_.capitalize()}: {len(cl_)} team-matches so far; the market needs about 600 to be tested.")
+        return
+    cl_[["own_r", "against_r"]] = cl_.groupby("Team")[["own", "against"]].transform(lambda s_: s_.shift(1).rolling(8, min_periods=4).mean())
+    hm_ = cl_[cl_["is_home"] == 1].merge(cl_[["Team", "Date", "own_r", "against_r"]].rename(columns={"Team": "Opp", "own_r": "o_own_r", "against_r": "o_against_r"}),
+                                          on=["Opp", "Date"]).dropna(subset=["own_r", "against_r", "o_own_r", "o_against_r"])
+    if len(hm_) < 300:
+        return
+    hm_["total"] = hm_["own"] + hm_["against"]
+    lg_avg_h = hm_.groupby("League")["own"].transform(lambda s_: s_.shift(1).expanding(min_periods=20).mean())
+    lg_avg_a = hm_.groupby("League")["against"].transform(lambda s_: s_.shift(1).expanding(min_periods=20).mean())
+    hm_["mu_h"] = 0.7 * (hm_["own_r"] + hm_["o_against_r"]) / 2 + 0.3 * lg_avg_h.fillna(hm_["own_r"])
+    hm_["mu_a"] = 0.7 * (hm_["o_own_r"] + hm_["against_r"]) / 2 + 0.3 * lg_avg_a.fillna(hm_["o_own_r"])
+    lines_t = (np.floor(hm_.groupby("League")["total"].median()) + 0.5).to_dict()
+    lines_h = (np.floor(hm_.groupby("League")["own"].median()) + 0.5).to_dict()
+    lines_a = (np.floor(hm_.groupby("League")["against"].median()) + 0.5).to_dict()
+    k_t = est_k(hm_["total"], hm_["mu_h"] + hm_["mu_a"]); k_h = est_k(hm_["own"], hm_["mu_h"]); k_a = est_k(hm_["against"], hm_["mu_a"])
+    dates_ = hm_["Date"].values.astype("datetime64[D]")
+    if RUN_REPLAYS:
+        band_check(f"Total {label_} over the league line", np.array([nb_over(a + b, k_t, lines_t[l]) for a, b, l in zip(hm_["mu_h"], hm_["mu_a"], hm_["League"])]),
+                   (hm_["total"] > hm_["League"].map(lines_t)).astype(float).values, dates_)
+        band_check(f"Home {label_} over the league line", np.array([nb_over(a, k_h, lines_h[l]) for a, l in zip(hm_["mu_h"], hm_["League"])]),
+                   (hm_["own"] > hm_["League"].map(lines_h)).astype(float).values, dates_)
+        band_check(f"Away {label_} over the league line", np.array([nb_over(a, k_a, lines_a[l]) for a, l in zip(hm_["mu_a"], hm_["League"])]),
+                   (hm_["against"] > hm_["League"].map(lines_a)).astype(float).values, dates_)
+    latest_ = cl_.groupby("Team")[["own", "against"]].apply(lambda d_: d_.tail(8).mean()).to_dict("index")
+    team_lg = cl_.groupby("Team")["League"].last().to_dict()
+    lgm_h, lgm_a = hm_.groupby("League")["own"].mean().to_dict(), hm_.groupby("League")["against"].mean().to_dict()
+    n_ = 0
+    for r_ in upc_m.to_dict("records"):
+        h_, a_ = latest_.get(r_["Home"]), latest_.get(r_["Away"])
+        lg_ = r_["Competition"] if r_["Competition"] in lines_t else team_lg.get(r_["Home"])
+        if not h_ or not a_ or lg_ not in lines_t:
+            continue
+        mh = 0.7 * (h_["own"] + a_["against"]) / 2 + 0.3 * lgm_h.get(lg_, h_["own"])
+        ma = 0.7 * (a_["own"] + h_["against"]) / 2 + 0.3 * lgm_a.get(lg_, a_["own"])
+        k0 = keyof(r_)
+        add_market(k0, f"Over {lines_t[lg_]} total {label_} (expected {mh + ma:.1f})", nb_over(mh + ma, k_t, lines_t[lg_]), family_,
+                   f"Total {label_} over the league line", code=f"CNT|{stat_}|tot|{lines_t[lg_]}")
+        add_market(k0, f"{r_['Home']} over {lines_h[lg_]} {label_} (expected {mh:.1f})", nb_over(mh, k_h, lines_h[lg_]), family_,
+                   f"Home {label_} over the league line", code=f"CNT|{stat_}|home|{lines_h[lg_]}")
+        add_market(k0, f"{r_['Away']} over {lines_a[lg_]} {label_} (expected {ma:.1f})", nb_over(ma, k_a, lines_a[lg_]), family_,
+                   f"Away {label_} over the league line", code=f"CNT|{stat_}|away|{lines_a[lg_]}")
+        n_ += 1
+    print(f"{label_.capitalize()}: {len(cl_)} team-matches; priced for {n_} upcoming matches.")
+count_market("offsides", "offsides", "offsides")
+count_market("tackles", "tackles", "tackles")
+
+# ---------- 6. v30: player tackles (PitchAPI's per-player statistics): switches on once its calibration test passes ----------
+PLAYER_TACKLES_PRIOR = 1.6           # tackles per 90 of a typical outfield player (shrinkage target)
+PLP_ = f"{SAVE_DIR}/pitchapi_players.csv"
+if os.path.exists(PLP_) and len(PA_TACTICS) if "PA_TACTICS" in globals() else False:
+    pp_ = checked_read(PLP_, text=("match_id", "team_id", "player_id", "player"), num=("tackles", "minutes"), name="pitchapi_players").dropna(subset=["tackles", "minutes"])
+    pp_ = pp_[pp_["minutes"] > 0]
+    pcm_ = checked_read(f"{SAVE_DIR}/pitchapi_matches.csv", text=("id", "league", "home", "away", "home_id", "away_id"), name="pitchapi_matches")
+    if len(pp_) >= 3000 and "home_id" in pcm_:
+        pp_ = pp_.merge(pcm_[["id", "league", "date", "home", "away", "home_id", "away_id"]].rename(columns={"id": "match_id"}), on="match_id", how="inner")
+        pp_["Date"] = pd.to_datetime(pp_["date"]).dt.normalize()
+        pp_["team_name"] = np.where(pp_["team_id"] == pp_["home_id"], pp_["home"], np.where(pp_["team_id"] == pp_["away_id"], pp_["away"], None))
+        pp_ = pp_.dropna(subset=["team_name"]).sort_values("Date").reset_index(drop=True)
+        cum_t_ = pp_.groupby("player_id")["tackles"].cumsum() - pp_["tackles"]          # before this match
+        cum_m_ = pp_.groupby("player_id")["minutes"].cumsum() - pp_["minutes"]
+        pp_["per90_prev"] = (cum_t_ + 5 * PLAYER_TACKLES_PRIOR) / (cum_m_ / 90 + 5)        # shrunk toward a typical player
+        pp_["min_prev"] = pp_.groupby("player_id")["minutes"].transform(lambda s_: s_.shift(1).rolling(6, min_periods=2).mean())
+        test_ = pp_.dropna(subset=["per90_prev", "min_prev"])
+        lam_ = test_["per90_prev"] * test_["min_prev"] / 90
+        if RUN_REPLAYS and len(test_) >= 2000:
+            band_check("Player 1+ tackle", (1 - np.exp(-lam_)).values, (test_["tackles"] >= 1).astype(float).values, test_["Date"].values.astype("datetime64[D]"))
+            band_check("Player 2+ tackles", (1 - np.exp(-lam_) * (1 + lam_)).values, (test_["tackles"] >= 2).astype(float).values, test_["Date"].values.astype("datetime64[D]"))
+        last_ = pp_.groupby(["team_name", "player"]).agg(per90=("per90_prev", "last"), mins=("minutes", lambda s_: s_.tail(6).mean()), n=("minutes", "size"),
+                                                         last_date=("Date", "max"))
+        last_ = last_[(last_["n"] >= 3) & (last_["last_date"] >= TODAY - pd.Timedelta(days=45))]
+        names_pa = {}
+        if "map_by_fixtures" in globals():
+            for key_, g_ in pcm_.assign(Date=pd.to_datetime(pcm_["date"])).groupby("league"):
+                our_ = inv_pa.get(key_) if "inv_pa" in globals() else None
+                if our_:
+                    names_pa.update(map_by_fixtures(g_.rename(columns={"home": "H", "away": "A"})[["Date", "H", "A"]],
+                                                    league_frame(our_)[["Date", "HomeTeam", "AwayTeam"]].rename(columns={"HomeTeam": "H", "AwayTeam": "A"})))
+        ours_to_pa = {v: k for k, v in names_pa.items()}
+        n_pt = 0
+        for r_ in upc_m.to_dict("records"):
+            for team_ in (r_["Home"], r_["Away"]):
+                pa_name = ours_to_pa.get(team_, team_)
+                if pa_name not in last_.index.get_level_values(0):
+                    continue
+                cand_ = last_.loc[pa_name].assign(lam=lambda d_: d_["per90"] * d_["mins"] / 90).sort_values("lam", ascending=False).head(2)
+                for pl_, row_ in cand_.iterrows():
+                    add_market(keyof(r_), f"{pl_} 2+ tackles", 1 - np.exp(-row_["lam"]) * (1 + row_["lam"]), "player_props", "Player 2+ tackles",
+                               code=f"PT|2|{pl_}")
+                    n_pt += 1
+        print(f"Player tackles: {len(pp_)} player-matches stored; priced for {n_pt} players.")
+    else:
+        print(f"Player tackles: {len(pp_)} player-matches so far; the model needs about 3,000 (the download continues each run).")
+
 print(f"More markets: priced for {len(MARKETS)} matches; trusted tests: " + ", ".join(k for k, v in MARKET_TRUST.items() if v.get("trusted")) + ".")
 EXTRA_TABLES_EARLY = list(globals().get("EXTRA_TABLES_EARLY", [])) + market_tables

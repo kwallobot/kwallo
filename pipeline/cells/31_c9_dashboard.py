@@ -331,7 +331,7 @@ function moreHTML(m) {
   const M = (D.markets || {})[keyOf(m)];
   if (!M || !M.length) return "";
   const fam = {shots: "Shots", sot: "Shots on target", fouls: "Fouls", halftime: "Half-time", halftime_both: "Half-time", timing: "Timing", penalty: "Penalties",
-               player_props: "Player props", first_scorer: "First goalscorer", throwins: "Throw-ins"};
+               player_props: "Player props", first_scorer: "First goalscorer", throwins: "Throw-ins", offsides: "Offsides", tackles: "Tackles"};
   const groups = [...new Set(M.map(x => fam[x.family] || x.family))];
   return `<details class="sg"><summary>More markets (${M.length})</summary>${groups.map(g => `<div class="tt" style="margin-top:6px">${esc(g)}</div>` +
     M.filter(x => (fam[x.family] || x.family) === g).map(x => `<div class="line" style="font-size:0.88rem">${esc(x.Bet)}: <strong>${pct(x.p)}</strong> · fair odds ${x.fair.toFixed(2)} <span class="noedge">${x.trusted ? "calibrated" : "experimental"}</span></div>`).join("")).join("")}

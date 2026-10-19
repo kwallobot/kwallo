@@ -37,7 +37,15 @@ ALWAYS = {'SAVE_DIR = "/content/drive/MyDrive/football"': f'SAVE_DIR = {DATA!r}'
 def display(x):
     print(x.to_string() if hasattr(x, "to_string") else x)
 
+CHECKPOINTS = {"03_c2b_espn.py", "05_c2d_pitchapi.py", "06_c2e_bsd_context.py", "08_c3b_player.py"}   # v30: save progress after the slow downloads
+OPTIONAL = {"c10_experiments.py", "c8f_lower.py", "c8h_ml.py"}                                  # skipped if the run is short of time
+TIME_BUDGET_MIN = float(os.environ.get("PITCHLAB_TIME_BUDGET", "280" if MODE == "full" else "70"))
+
 def main():
+    try:
+        sys.stdout.reconfigure(line_buffering=True)        # v30: the log shows progress live on GitHub
+    except Exception:
+        pass
     t_start = time.time()
     os.makedirs(DATA, exist_ok=True)
     print(f"Kwallo pipeline, mode '{MODE}', data in {DATA}")
@@ -49,12 +57,17 @@ def main():
         src = open(os.path.join(HERE, "cells", name)).read()
         for a, b in {**ALWAYS, **MODES[MODE]}.items():
             src = src.replace(a, b)
-        if MODE == "lineups" and name.split("_", 1)[1] in ("c10_experiments.py", "c8f_lower.py", "c8h_ml.py"):
+        if MODE == "lineups" and name.split("_", 1)[1] in OPTIONAL:
             continue                                             # not needed shortly before kickoff
+        if name.split("_", 1)[1] in OPTIONAL and (time.time() - t_start) / 60 > TIME_BUDGET_MIN:
+            print(f"[{name}] skipped: the run has used {(time.time() - t_start) / 60:.0f} minutes, so optional sections wait for the next run.")
+            continue
         t0 = time.time()
         try:
             exec(compile(src, name, "exec"), ns)
             print(f"[{name}] done in {time.time() - t0:.0f}s")
+            if name in CHECKPOINTS:
+                synced = storage.sync_up(DATA, synced)            # v30: an interrupted run keeps what it downloaded
         except Exception:
             failed = name
             traceback.print_exc()
@@ -68,6 +81,11 @@ def main():
         except Exception:
             traceback.print_exc()
             print("Alerts: failed this run (predictions were still exported).")
+        try:
+            alerts.channel_posts(DATA, MODE)                      # v30: the public channel
+        except Exception:
+            traceback.print_exc()
+            print("Channel posts: failed this run.")
     storage.sync_up(DATA, synced)
     if MODE == "full":
         try:

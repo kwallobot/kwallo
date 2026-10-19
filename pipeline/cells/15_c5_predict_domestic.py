@@ -47,13 +47,13 @@ def get_fixtures():
     for (lg_, t_), g_ in long_.groupby(["League", "Team"]):
         g_ = g_.sort_values("Date")
         for a_, b_ in zip(g_.itertuples(), list(g_.itertuples())[1:]):
-            if (b_.Date - a_.Date).days <= 2:
+            if (b_.Date - a_.Date).days <= 1:                  # v30: same day or next day (two days apart happens: Christmas, Liga MX)
                 sa_, sb_ = fx.loc[a_.i, "src"], fx.loc[b_.i, "src"]
                 bad = [b_.i] if sa_ > sb_ else ([a_.i] if sb_ > sa_ else [a_.i, b_.i])     # the more trusted source wins
                 for i_ in bad:
                     if i_ not in drop:
                         FIXTURE_WARNINGS.append(f"{lg_}: {fx.loc[i_, 'HomeTeam']} v {fx.loc[i_, 'AwayTeam']} ({fx.loc[i_, 'Date']:%d %b}) dropped: "
-                                                f"{t_} would play twice within 2 days, so a team name is probably mis-linked")
+                                                f"{t_} would play twice within a day, so a team name is probably mis-linked")
                 drop.update(bad)
     fx = fx.drop(index=list(drop))
     return fx.reset_index(drop=True)
@@ -172,7 +172,7 @@ fixtures = get_fixtures()
 print(f"{len(fixtures)} domestic, MLS and Saudi fixtures in the next {PREDICT_DAYS} days.")
 for w_ in FIXTURE_WARNINGS:
     print("  WARNING:", w_)
-health("Fixture sanity check", not FIXTURE_WARNINGS, f"{len(FIXTURE_WARNINGS)} doubtful fixtures dropped" if FIXTURE_WARNINGS else "no team plays twice within 2 days")
+health("Fixture sanity check", not FIXTURE_WARNINGS, f"{len(FIXTURE_WARNINGS)} doubtful fixtures dropped" if FIXTURE_WARNINGS else "no team plays twice within a day")
 dom_preds = []
 CAL_PATH = f"{SAVE_DIR}/calibration.json"
 CALIBRATION = json.load(open(CAL_PATH)) if os.path.exists(CAL_PATH) else {}

@@ -18,6 +18,7 @@ PA_TACTIC_LEAGUES = {"Premier League": ("ENG", "Premier League"), "La Liga": ("E
                      "Serie A": ("ITA", "Serie A"), "Ligue 1": ("FRA", "Ligue 1")}
 PITCHAPI_TACTICS_MINUTES = 10  # time limit per run for formations and match statistics (set 0 to skip)
 PITCHAPI_SHOTS_MINUTES = 5     # time limit per run for shot-by-shot data (set 0 to skip)
+PITCHAPI_PLAYERS_MINUTES = 6   # v30: time limit per run for every player's match statistics (tackles etc.; set 0 to skip)
 
 def _secret(name):
     try:
@@ -108,7 +109,7 @@ if PA_KEY:
         if len(pcache):
             usa_ = pcache["league"].astype(str).str.split(":").str[0].isin(CALENDAR_COUNTRIES)
             pcache.loc[usa_, "label"] = pcache.loc[usa_, "season"]          # v21: MLS labels are its calendar-year seasons
-        done_seasons = set(zip(pcache["league"], pcache["season"])) if len(pcache) else set()
+        done_seasons = set(zip(pcache["league"], pcache["season"])) if len(pcache) and "home_id" in pcache else set()   # v30: refetch once for team ids
         def league_matches(country, name):
             row = lg_df[(lg_df["country_code"] == country) & (lg_df["name"] == name)]
             if row.empty:
@@ -129,6 +130,7 @@ if PA_KEY:
                 for m_ in d_.get("matches", []):
                     out.append({"league": key_[0], "season": s_, "label": lab, "id": m_["id"], "date": m_["date"], "status": m_.get("status"),
                                 "home": m_["home_team"]["name"], "away": m_["away_team"]["name"],
+                                "home_id": m_["home_team"].get("id"), "away_id": m_["away_team"].get("id"),
                                 "score_home": m_.get("score_home"), "score_away": m_.get("score_away")})
             return out
         new_rows = []
@@ -218,11 +220,11 @@ if PA_KEY:
             st_ = pa(f"/v1/matches/{r_.id}/stats") or {}
             xh = xa = np.nan
             extra_ = {}
-            for per in st_.get("periods", []):
+            for per in (st_.get("periods") or []):
                 if per.get("period") != "All":
                     continue
-                for grp in per.get("groups", []):
-                    for it in grp.get("items", []):
+                for grp in (per.get("groups") or []):
+                    for it in (grp.get("items") or []):
                         k_ = str(it.get("key", ""))
                         if k_ == "expected_goals":
                             xh, xa = pd.to_numeric(it.get("home"), errors="coerce"), pd.to_numeric(it.get("away"), errors="coerce")
@@ -268,11 +270,11 @@ if PA_KEY:
             st_ = pa(f"/v1/matches/{r_.id}/stats") or {}
             lu_t = pa(f"/v1/matches/{r_.id}/lineups") or {}
             vals = {}
-            for per in st_.get("periods", []):
+            for per in (st_.get("periods") or []):
                 if per.get("period") != "All":
                     continue
-                for grp_ in per.get("groups", []):
-                    for it in grp_.get("items", []):
+                for grp_ in (per.get("groups") or []):
+                    for it in (grp_.get("items") or []):
                         lead_ = lambda v_: pd.to_numeric((re.match(r"\s*(-?[0-9.]+)", str(v_)) or [None, None])[1], errors="coerce")   # "312 (85%)" -> 312
                         h_, a_ = lead_(it.get("home")), lead_(it.get("away"))
                         if pd.notna(h_) and pd.notna(a_):
@@ -305,4 +307,44 @@ if PA_KEY:
         if shots_rows:
             pd.DataFrame(shots_rows).to_csv(SHP, mode="a", header=not os.path.exists(SHP), index=False)
         print(f"PitchAPI shot-by-shot: {len(shot_done) + n_sm} matches stored ({n_sm} added this run, {max(0, len(todo_s) - n_sm)} to go).")
+
+        # ---- (e) v30: every player's match statistics (tackles, minutes, rating...), newest first ----
+        PLP = f"{SAVE_DIR}/pitchapi_players.csv"
+        pl_done = set(checked_read(PLP, text=("match_id",), name="pitchapi_players")["match_id"].astype(str)) if os.path.exists(PLP) else set()
+        todo_p = pcache[pcache["league"].isin(tac_leagues) & (pcache["status"] == "finished") & ~pcache["id"].astype(str).isin(pl_done)].sort_values("date", ascending=False)
+        t3, pl_rows, n_pm = time.time(), [], 0
+        def _flat(obj, out):
+            """Collect every numeric statistic in a player's block, whatever its nesting: {"key": ..., "value": ...}."""
+            if isinstance(obj, dict):
+                k_, v_ = obj.get("key"), obj.get("value", obj.get("stat", obj.get("total")))
+                if k_ is not None and v_ is not None and not isinstance(v_, (dict, list)):
+                    vv = pd.to_numeric((re.match(r"\s*(-?[0-9.]+)", str(v_)) or [None, None])[1], errors="coerce")
+                    if pd.notna(vv):
+                        out[str(k_).lower()] = float(vv)
+                for x_ in obj.values():
+                    if isinstance(x_, (dict, list)):
+                        _flat(x_, out)
+            elif isinstance(obj, list):
+                for x_ in obj:
+                    _flat(x_, out)
+        for r_ in todo_p.itertuples():
+            if time.time() - t3 > PITCHAPI_PLAYERS_MINUTES * 60:
+                break
+            pls_ = pa(f"/v1/matches/{r_.id}/players") or []
+            for p_ in (pls_ if isinstance(pls_, list) else []):
+                st_ = {}
+                _flat(p_.get("stats") or [], st_)
+                tk_ = next((v for k, v in st_.items() if k in ("tackles", "total_tackle", "tackles_won", "tackle") or k.endswith("tackles")), np.nan)
+                mn_ = next((v for k, v in st_.items() if "minute" in k), np.nan)
+                pl_rows.append({"match_id": str(r_.id), "team_id": p_.get("team_id"), "player_id": (p_.get("player") or {}).get("id"),
+                                "player": (p_.get("player") or {}).get("name"), "tackles": tk_, "minutes": mn_,
+                                "rating": next((v for k, v in st_.items() if "rating" in k), np.nan),
+                                "interceptions": next((v for k, v in st_.items() if "interception" in k), np.nan)})
+            if not pls_:
+                pl_rows.append({"match_id": str(r_.id)})
+            n_pm += 1
+            time.sleep(0.1)
+        if pl_rows:
+            pd.DataFrame(pl_rows).to_csv(PLP, mode="a", header=not os.path.exists(PLP), index=False)
+        print(f"PitchAPI player statistics: {len(pl_done) + n_pm} matches stored ({n_pm} added this run, {max(0, len(todo_p) - n_pm)} to go).")
 health("PitchAPI", PA_KEY is not None and "unavailable" not in pa_status, pa_status)

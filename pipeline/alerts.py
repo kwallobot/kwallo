@@ -1,4 +1,4 @@
-"""Sends match alerts to @kwalloBot followers, after each pipeline run.
+"""Sends match alerts to @kwalloAI_bot followers, after each pipeline run.
 Two alerts per match: a PREVIEW (about a day before: probabilities, top angle, expected lineups) and LINEUPS (once the
 official lineups are out, about 75 minutes before kickoff in the Premier League). Each is sent once per person per match.
 Informational only: probabilities and fair odds, no bookmakers."""
@@ -113,3 +113,90 @@ def send(ns, data_dir, mode):
     sent = {k: v for k, v in sent.items() if pd.Timestamp(v) > now - pd.Timedelta(days=21)}   # keep the log small
     json.dump(sent, open(log_path, "w"))
     print(f"Alerts: {n_sent} messages sent to followers.")
+
+
+# ---------- v30: the public Kwallo channel (@kwallo_official) ----------
+# Morning digest, big-match previews, yesterday's results and (Mondays) the weekly track record. Each goes out once.
+# Informational only: probabilities and fair odds, no bookmakers. The channel can be changed with a GitHub variable TELEGRAM_CHANNEL.
+BIG_COMPS = {"Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions League", "Europa League"}
+
+def _post(token, channel, text, sent, key):
+    if key in sent:
+        return False
+    ok = _send(token, channel, text)
+    if ok:
+        sent[key] = pd.Timestamp.now("UTC").tz_convert(None).isoformat()
+    return ok
+
+def channel_posts(data_dir, mode):
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    channel = os.environ.get("TELEGRAM_CHANNEL") or "@kwallo_official"
+    if not token or mode == "lineups":
+        return
+    site = os.environ.get("SITE_URL", "")
+    idx_p = os.path.join(data_dir, "site", "index.json")
+    if not os.path.exists(idx_p):
+        return
+    idx = json.load(open(idx_p))
+    log_path = os.path.join(data_dir, "channel_sent.json")
+    sent = json.load(open(log_path)) if os.path.exists(log_path) else {}
+    now = pd.Timestamp.now("UTC").tz_convert(None)
+    today, yday = now.strftime("%Y-%m-%d"), (now - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    n = 0
+    # 1. morning digest: today's matches with their top angle (grouped by competition, capped so it fits one message)
+    todays = [m for m in idx["matches"] if m["Date"][:10] == today]
+    if todays:
+        lines = [f"☀️ <b>Kwallo · {now:%A %d %B}</b>", "<i>football, decoded.</i> Today's top angles, with fair odds:", ""]
+        by_comp = {}
+        for m in sorted(todays, key=lambda m: (m["Competition"] not in BIG_COMPS, m.get("kickoff") or "", m["Competition"])):
+            by_comp.setdefault(m["Competition"], []).append(m)
+        shown = 0
+        for comp, ms in by_comp.items():
+            if shown >= 25:
+                break
+            lines.append(f"<b>{html.escape(comp)}</b>")
+            for m in ms[:6]:
+                tp = m.get("top_pick") or {}
+                ko = f"{m['kickoff'][11:16]} " if m.get("kickoff") else ""
+                lines.append(f"{ko}{html.escape(m['Home'])} v {html.escape(m['Away'])}" + (f": {html.escape(tp['Bet'])} {_pct(tp['p'])} (fair {tp['fair']:.2f})" if tp else ""))
+                shown += 1
+            lines.append("")
+        lines.append("<i>Model probabilities, not guarantees. Worth it only above the fair odds. 18+.</i>")
+        n += _post(token, channel, "\n".join(lines)[:4000], sent, f"digest|{today}")
+    # 2. big-match previews: up to three headline games kicking off in the next 6-30 hours
+    soon = []
+    for m in idx["matches"]:
+        if not m.get("kickoff"):
+            continue
+        h = (pd.Timestamp(m["kickoff"]).tz_localize(None) - now).total_seconds() / 3600
+        if 6 <= h <= 30 and m["Competition"] in BIG_COMPS:
+            closeness = 1 - abs((m.get("pH") or 0) - (m.get("pA") or 0))
+            soon.append((closeness + (0.3 if "Champions" in m["Competition"] else 0), m))
+    for _, m in sorted(soon, key=lambda x: -x[0])[:3]:
+        d_path = os.path.join(data_dir, "site", "match", f"{m['slug']}.json")
+        if os.path.exists(d_path):
+            n += _post(token, channel, "🔥 <b>Big match</b>\n" + preview_text(json.load(open(d_path)), site), sent, f"preview|{m['slug']}")
+    # 3. yesterday's results: how the top angles did, against what the model expected
+    vl = os.path.join(data_dir, "verdict_log.csv")
+    if os.path.exists(vl):
+        v = pd.read_csv(vl)
+        if "won" in v:
+            yv = v[(v["Date"].astype(str) == yday) & (v["kind"] == "best")].dropna(subset=["won"])
+            if len(yv) >= 3:
+                rows = [f"{'✅' if r.won > 0 else '❌'} {html.escape(str(r.Home))} v {html.escape(str(r.Away))}: {html.escape(str(r.Bet))} ({_pct(r.p)})" for r in yv.head(20).itertuples()]
+                txt = (f"🏁 <b>Yesterday's top angles</b>: {int(yv['won'].sum())} of {len(yv)} landed "
+                       f"({100 * yv['won'].mean():.0f}% vs {100 * yv['p'].mean():.0f}% the model expected)\n\n" + "\n".join(rows)
+                       + "\n\n<i>A hit rate close to the expected one means the probabilities are honest. 18+.</i>")
+                n += _post(token, channel, txt[:4000], sent, f"results|{yday}")
+            # 4. Mondays (full run): the week's track record
+            if mode == "full":
+                wk = v[(pd.to_datetime(v["Date"]) >= now - pd.Timedelta(days=7)) & (v["kind"] == "best")].dropna(subset=["won"])
+                allv = v[v["kind"] == "best"].dropna(subset=["won"])
+                if len(wk) >= 10:
+                    txt = (f"📊 <b>Kwallo weekly track record</b>\nLast 7 days: top angles landed {100 * wk['won'].mean():.0f}% "
+                           f"(the model expected {100 * wk['p'].mean():.0f}%), {len(wk)} picks.\nSince launch: {100 * allv['won'].mean():.0f}% vs "
+                           f"{100 * allv['p'].mean():.0f}% expected, {len(allv)} picks.\n\n<i>We publish every pick, hits and misses. 18+.</i>")
+                    n += _post(token, channel, txt, sent, f"weekly|{now:%G-W%V}")
+    sent = {k: s for k, s in sent.items() if pd.Timestamp(s) > now - pd.Timedelta(days=30)}
+    json.dump(sent, open(log_path, "w"))
+    print(f"Channel {channel}: {n} posts this run.")

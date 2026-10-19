@@ -46,7 +46,7 @@ def sync_up(local, seen, prefix="data/"):
     """Upload files that are new or changed since the download."""
     c, bucket = _client()
     if c is None:
-        return
+        return seen
     n = 0
     for root, _, files in os.walk(local):
         for f in files:
@@ -55,8 +55,10 @@ def sync_up(local, seen, prefix="data/"):
             if rel in seen and "-" not in seen[rel] and _md5(path) == seen[rel]:
                 continue
             c.upload_file(path, bucket, prefix + rel)
+            seen[rel] = _md5(path)                                  # v30: remember it, so later checkpoints skip it
             n += 1
     print(f"Storage: {n} files uploaded to R2.")
+    return seen
 
 def put_public(key, body, content_type="application/json"):
     """Write one file to the site/ area of the bucket (what the web app and the Telegram bot read)."""

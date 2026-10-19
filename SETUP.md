@@ -10,7 +10,7 @@
 |---|---|---|
 | **GitHub** (a private project) | Runs the model on a schedule: weekly full run (Monday 03:00 UTC), daily refresh (05:00 UTC), and lineup-time runs | Free (2,000 minutes a month on private projects) |
 | **Cloudflare R2** (storage) | Holds all the data (what used to live in your Drive `football` folder) and the public data files for the site | Free up to 10 GB |
-| **Cloudflare Worker + D1** | Answers **@kwalloBot**, stores followers (chat IDs and choices only), and starts a lineup-time run about 70 minutes before kickoffs | Free |
+| **Cloudflare Worker + D1** | Answers **@kwalloAI_bot**, stores followers (chat IDs and choices only), and starts a lineup-time run about 70 minutes before kickoffs | Free |
 | **Telegram** | Delivers the alerts | Free |
 
 Keys and passwords live only in GitHub's and Cloudflare's secret settings, never in the code.
@@ -55,7 +55,7 @@ In your browser, open this address, replacing the three parts in capitals (one l
 ```
 https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://YOUR-WORKER-ADDRESS/telegram&secret_token=YOUR_WEBHOOK_SECRET
 ```
-It should reply `"ok":true`. Then message **@kwalloBot** with `/start`: it should answer.
+It should reply `"ok":true`. Then message **@kwalloAI_bot** with `/start`: it should answer.
 
 ## Step 7: Put the project on GitHub
 1. GitHub: **New repository** → name **`pitchlab`** → **Private** → Create.
@@ -107,3 +107,8 @@ After each **weekly full run**, everything in `data/` is copied to **`backups/YY
    print(f"Restored {n} files from {DATE}.")
    ```
 3. Re-enable the workflows and start a **Weekly full run**.
+
+
+## The public channel (v30)
+
+The runs post to **@kwallo_official** by default (the bot must be an administrator there with "Post Messages"). To use a different channel, add a GitHub **variable** (not a secret): project → Settings → Secrets and variables → Actions → **Variables** tab → `TELEGRAM_CHANNEL` = `@yourchannel`.

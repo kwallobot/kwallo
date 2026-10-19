@@ -102,7 +102,7 @@ def update_lineups(minutes):
         months_full = set(state.get("months_full", []))           # months with both lineups and events stored
         first = pd.Timestamp(f"{hist.year}-02-01") if code in calendar_year else hist
         months = [d.strftime("%Y%m") for d in pd.date_range(first.replace(day=1), TODAY, freq="MS")][::-1]   # newest first
-        lbuf, ebuf = [], []
+        lbuf, ebuf, tbuf = [], [], []
         for m in months:
             if m in months_full:
                 continue
@@ -128,6 +128,13 @@ def update_lineups(minutes):
                     lbuf += parse_lineups(s, code, ev); done.add(eid); total_new += 1
                 if eid not in ev_done:
                     ebuf += parse_events(s, code, ev); ev_done.add(eid); total_events += 1
+                for tm_ in (s.get("boxscore") or {}).get("teams") or []:          # v30: team statistics (tackles, offsides...)
+                    st_ = {x_.get("name"): x_.get("displayValue") for x_ in tm_.get("statistics") or []}
+                    if st_:
+                        tbuf.append({"event_id": eid, "date": ev.get("date"), "comp": code, "team_id": str((tm_.get("team") or {}).get("id")),
+                                     "team": (tm_.get("team") or {}).get("displayName"), "side": tm_.get("homeAway"),
+                                     **{k_: st_.get(k_) for k_ in ["totalTackles", "effectiveTackles", "offsides", "interceptions", "possessionPct",
+                                                                   "totalShots", "shotsOnTarget", "wonCorners", "foulsCommitted", "totalPasses"]}})
             if complete and m < this_month:
                 months_full.add(m)
             if out_of_time:
@@ -136,6 +143,9 @@ def update_lineups(minutes):
             pd.DataFrame(lbuf).to_csv(path, mode="a", header=not os.path.exists(path), index=False)
         if ebuf:
             pd.DataFrame(ebuf).to_csv(epath, mode="a", header=not os.path.exists(epath), index=False)
+        if tbuf:
+            tpath_ = f"{SAVE_DIR}/lineups/{code}_teamstats.csv"
+            pd.DataFrame(tbuf).to_csv(tpath_, mode="a", header=not os.path.exists(tpath_), index=False)
         state.update({"done": sorted(done), "events_done": sorted(ev_done), "months_full": sorted(months_full)})
         json.dump(state, open(state_path, "w"))
         if out_of_time:
@@ -358,6 +368,36 @@ if PLAYER_MODEL or EURO_SOURCE == "espn":
     if len(espn_fx):
         espn_fx["HomeTeam"] = [team_map.get((l, t), t) for l, t in zip(espn_fx["League"], espn_fx["home_espn"])]
         espn_fx["AwayTeam"] = [team_map.get((l, t), t) for l, t in zip(espn_fx["League"], espn_fx["away_espn"])]
+        # v30: names the linker couldn't match yet (e.g. a new league whose lineups haven't downloaded), matched to the
+        # league's known clubs by accent-free name: "São Paulo" -> "Sao Paulo", "Red Bull Bragantino" -> "Bragantino",
+        # "Vasco da Gama" -> "Vasco". One-to-one, and only clear matches; clubs found in the second division stay "promoted".
+        import unicodedata as _ud
+        _stop = {"fc", "cf", "sc", "ec", "ac", "cd", "club", "de", "da", "do", "the", "rj", "sp", "mg", "rb", "red", "bull", "esporte", "clube", "futebol"}
+        def _cn(x):
+            w_ = _ud.normalize("NFKD", str(x)).encode("ascii", "ignore").decode().lower().replace("-", " ").replace(".", " ").split()
+            return "".join(t for t in w_ if t not in _stop) or "".join(w_)
+        name_fixes = {}
+        for lg_ in espn_fx["League"].unique():
+            known = set(league_frame(lg_)["HomeTeam"]) | set(league_frame(lg_)["AwayTeam"]) if len(league_frame(lg_)) else set()
+            if not known:
+                continue
+            lower2 = set(div2["HomeTeam"]) if "div2" in globals() and len(div2) else set()
+            unknown = sorted({t for t in pd.concat([espn_fx.loc[espn_fx["League"] == lg_, "HomeTeam"], espn_fx.loc[espn_fx["League"] == lg_, "AwayTeam"]]) if t not in known})
+            used = set(espn_fx.loc[espn_fx["League"] == lg_, ["HomeTeam", "AwayTeam"]].values.ravel()) & known
+            for u_ in unknown:
+                cu = _cn(u_)
+                scored = []
+                for k_ in known - used:
+                    ck = _cn(k_)
+                    sc_ = 1.0 if cu == ck else (0.92 if min(len(cu), len(ck)) >= 4 and (cu in ck or ck in cu) else difflib.SequenceMatcher(None, cu, ck).ratio())
+                    scored.append((sc_, k_))
+                scored.sort(reverse=True)
+                if scored and scored[0][0] >= 0.85 and (len(scored) < 2 or scored[0][0] - scored[1][0] >= 0.05) and u_ not in lower2:
+                    name_fixes[(lg_, u_)] = scored[0][1]; used.add(scored[0][1])
+        if name_fixes:
+            espn_fx["HomeTeam"] = [name_fixes.get((l, t), t) for l, t in zip(espn_fx["League"], espn_fx["HomeTeam"])]
+            espn_fx["AwayTeam"] = [name_fixes.get((l, t), t) for l, t in zip(espn_fx["League"], espn_fx["AwayTeam"])]
+            print("  Fixture names matched by spelling: " + ", ".join(f"{u} -> {k}" for (_, u), k in list(name_fixes.items())[:12]))
 
 
     # ---------- European competitions from ESPN ----------

@@ -1,4 +1,4 @@
-// Kwallo Telegram bot (@kwalloBot) + subscriber list for the pipeline + lineup-time run trigger.
+// Kwallo Telegram bot (@kwalloAI_bot) + subscriber list for the pipeline + lineup-time run trigger.
 // Stores only chat IDs and choices (D1). Informational alerts only: no bookmakers, 18+.
 const PRIVACY = "Kwallo stores only your Telegram chat ID and the teams/leagues and alert types you choose, to send you match alerts. " +
   "Nothing else is kept. Send /stop at any time to stop all alerts and delete your data. Alerts are model probabilities, not guarantees; 18+.";
@@ -72,7 +72,7 @@ async function handleUpdate(env, u) {
       const hit = list.find(x => x.slug === m[2]);
       return follow(env, chat, m[1], m[2], hit ? hit.name : m[2].replace(/-/g, " "));
     }
-    return reply(env, chat, `👋 Welcome to <b>Kwallo</b> — football, decoded.\nFree match alerts for the teams and leagues you follow.\nFollow a team or league with /follow, e.g. <code>/follow Arsenal</code>.\n\n${HELP}\n\n<i>${PRIVACY}</i>`);
+    return reply(env, chat, `👋 Welcome to <b>Kwallo</b> — football, decoded.\nFree match alerts for the teams and leagues you follow.\n📣 Daily previews, top angles and results: join @kwallo_official\nFollow a team or league with /follow, e.g. <code>/follow Arsenal</code>.\n\n${HELP}\n\n<i>${PRIVACY}</i>`);
   }
   if (cmd === "/follow") {
     if (!arg) return reply(env, chat, "Which team or league? For example: <code>/follow Arsenal</code> or <code>/follow Premier League</code>");

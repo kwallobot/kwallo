@@ -6,7 +6,7 @@
 import joblib
 TAC_LONG = pd.DataFrame(columns=["Team", "Date"])
 inv_pa = {f"{c}:{n}": our for our, (c, n) in {**PA_XG_LEAGUES, **PA_TACTIC_LEAGUES}.items()} if "PA_XG_LEAGUES" in globals() else {}
-parts_t, THROW_ROWS = [], []
+parts_t, THROW_ROWS, COUNT_ROWS = [], [], []
 if len(PA_TACTICS):
     for key_, g_ in PA_TACTICS.groupby("league"):
         our = inv_pa.get(key_)
@@ -24,6 +24,10 @@ if len(PA_TACTICS):
                 if team_ not in mp_:
                     continue
                 opp_name = r_.away if i_ == 0 else r_.home
+                for stat_, key_ in [("offsides", "Offsides"), ("tackles", "matchstats.headers.tackles")]:          # v30
+                    if pd.notna(gv(key_, i_)) and opp_name in mp_:
+                        COUNT_ROWS.append({"League": our, "Team": mp_[team_], "Opp": mp_[opp_name], "Date": pd.Timestamp(r_.date).normalize(),
+                                           "is_home": int(i_ == 0), "stat": stat_, "own": gv(key_, i_), "against": gv(key_, opp_i), "src": "pitchapi"})
                 if pd.notna(gv("player_throws", i_)) and opp_name in mp_:
                     THROW_ROWS.append({"League": our, "Team": mp_[team_], "Opp": mp_[opp_name], "Date": pd.Timestamp(r_.date).normalize(), "is_home": int(i_ == 0),
                                        "own": gv("player_throws", i_), "against": gv("player_throws", opp_i)})
@@ -44,6 +48,29 @@ if len(understat_teams) and "us_map" in globals():
 if parts_t:
     TAC_LONG = pd.concat([pd.DataFrame(p_) if isinstance(p_, list) else p_ for p_ in [pd.DataFrame([x for x in parts_t if isinstance(x, dict)])] + [x for x in parts_t if not isinstance(x, dict)]], ignore_index=True)
     TAC_LONG = TAC_LONG.groupby(["Team", "Date"], as_index=False).mean(numeric_only=True).sort_values("Date")
+# v30: ESPN's team statistics (kept by the lineup download) for every ESPN league, in our team names
+for code_, league_ in ESPN_LEAGUES.items():
+    tp_ = f"{SAVE_DIR}/lineups/{code_}_teamstats.csv"
+    if not os.path.exists(tp_):
+        continue
+    ts_ = checked_read(tp_, text=("event_id", "team_id", "team", "side", "comp"), num=("totalTackles", "offsides"), name=f"{code_}_teamstats")
+    ts_ = ts_.drop_duplicates(["event_id", "team_id"])
+    for ev_id, gg in ts_.groupby("event_id"):
+        if len(gg) != 2:
+            continue
+        h_, a_ = (gg[gg["side"] == "home"], gg[gg["side"] == "away"]) if set(gg["side"]) == {"home", "away"} else (gg.iloc[[0]], gg.iloc[[1]])
+        if h_.empty or a_.empty:
+            continue
+        h_, a_ = h_.iloc[0], a_.iloc[0]
+        hn, an = team_map.get((league_, h_["team"]), h_["team"]), team_map.get((league_, a_["team"]), a_["team"])
+        d_ = pd.Timestamp(h_["date"]).tz_localize(None).normalize() if pd.Timestamp(h_["date"]).tzinfo is None else pd.Timestamp(h_["date"]).tz_convert(None).normalize()
+        for stat_, col_ in [("offsides", "offsides"), ("tackles", "totalTackles")]:
+            if pd.notna(h_.get(col_)) and pd.notna(a_.get(col_)):
+                COUNT_ROWS.append({"League": league_, "Team": hn, "Opp": an, "Date": d_, "is_home": 1, "stat": stat_, "own": float(h_[col_]), "against": float(a_[col_]), "src": "espn"})
+                COUNT_ROWS.append({"League": league_, "Team": an, "Opp": hn, "Date": d_, "is_home": 0, "stat": stat_, "own": float(a_[col_]), "against": float(h_[col_]), "src": "espn"})
+COUNT_LONG = (pd.DataFrame(COUNT_ROWS).sort_values(["src"], ascending=False).drop_duplicates(["League", "Team", "Date", "stat"]).sort_values("Date")
+              if COUNT_ROWS else pd.DataFrame(columns=["League", "Team", "Opp", "Date", "is_home", "stat", "own", "against", "src"]))
+print(f"Team counts for new markets: " + ", ".join(f"{s_} {int((COUNT_LONG['stat'] == s_).sum())} team-matches" for s_ in ["offsides", "tackles"]))
 THROW_LONG = pd.DataFrame(THROW_ROWS).drop_duplicates(["Team", "Date"]).sort_values("Date") if THROW_ROWS else pd.DataFrame()
 TAC_COLS = [c_ for c_ in ["poss", "direct", "setp", "box", "press", "back3", "ppda", "deep", "xg_per_shot", "box_share", "finishing"] if c_ in TAC_LONG]
 if len(TAC_LONG):

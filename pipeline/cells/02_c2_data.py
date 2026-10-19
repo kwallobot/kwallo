@@ -1,5 +1,5 @@
 # ===================== 1. LOAD DATA =====================
-import os, difflib, warnings
+import os, difflib, warnings, time
 import numpy as np
 import pandas as pd
 from scipy import sparse
@@ -94,6 +94,17 @@ def load_new_format(code, name):
         d[c] = pd.to_numeric(d[c], errors="coerce")
     return d.dropna(subset=["FTHG", "FTAG"]).sort_values("Date").reset_index(drop=True)
 
+def _load_new_safe(code, name):
+    """v30: football-data.co.uk sometimes times out (HTTP 504); try three times, then carry on without that league."""
+    for attempt in range(3):
+        try:
+            return load_new_format(code, name)
+        except Exception as ex_:
+            last_ = ex_
+            time.sleep(10 * (attempt + 1))
+    print(f"  could not load {name} ({str(last_)[:60]}); carrying on without it this run")
+    health(f"football-data.co.uk: {name}", False, f"not loaded this run ({str(last_)[:40]})")
+    return pd.DataFrame(columns=["League", "Season", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"] + ODDS)
 def read_euro(fname):
     try:
         t = pd.read_csv(f"{SAVE_DIR}/{fname}", encoding="utf-8-sig")
@@ -135,7 +146,7 @@ SOLO = {"MLS": {"data": mls, "season": MLS_SEASONS[-1], "half_life": 180, "group
 FD_NEW_LEAGUES = {"MEX": ("Liga MX", "Americas"), "ARG": ("Argentina Liga Profesional", "Americas"), "BRA": ("Brasileirão Série A", "Americas")}
 for code_, (name_, group_) in (FD_NEW_LEAGUES.items() if INCLUDE_NEW_LEAGUES else []):
     try:
-        d_ = load_new_format(code_, name_)
+        d_ = _load_new_safe(code_, name_)
         d_ = d_[d_["Date"] >= TODAY - pd.Timedelta(days=3 * 365 + 30)].reset_index(drop=True)
         if len(d_) >= 200:
             SOLO[name_] = {"data": d_, "season": str(d_["Season"].iloc[-1]), "half_life": 180, "group": group_}
@@ -147,7 +158,7 @@ def league_frame(league):
 def league_season(league):
     return SOLO[league]["season"] if league in SOLO else SEASONS[-1]
 start = pd.Timestamp(f"20{SEASONS[0][:2]}-01-01")
-extra_matches = pd.concat([load_new_format(code, name) for code, (cc, name) in EXTRA.items()], ignore_index=True)
+extra_matches = pd.concat([_load_new_safe(code, name) for code, (cc, name) in EXTRA.items()], ignore_index=True)
 extra_matches = extra_matches[extra_matches["Date"] >= start]
 domestic = pd.concat([all_matches, extra_matches], ignore_index=True).sort_values("Date").reset_index(drop=True)
 _lag = (TODAY - all_matches["Date"].max()).days
