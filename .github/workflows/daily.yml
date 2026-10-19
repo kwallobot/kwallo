@@ -7,7 +7,7 @@ concurrency: { group: pitchlab, cancel-in-progress: false }
 jobs:
   run:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -15,6 +15,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python pipeline/run.py
         env:
+          PYTHONUNBUFFERED: "1"                          # v30: the log shows progress live
           PITCHLAB_MODE: daily
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -26,3 +27,4 @@ jobs:
           WORKER_URL: ${{ secrets.WORKER_URL }}
           PIPELINE_KEY: ${{ secrets.PIPELINE_KEY }}
           SITE_URL: ${{ vars.SITE_URL }}
+          TELEGRAM_CHANNEL: ${{ vars.TELEGRAM_CHANNEL }}
