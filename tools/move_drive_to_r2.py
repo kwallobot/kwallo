@@ -1,4 +1,4 @@
-# ===== ONE-TIME: copy your PitchLab data from Google Drive to Cloudflare R2 =====
+# ===== ONE-TIME: copy your Kwallo data from Google Drive to Cloudflare R2 =====
 # Run this in a NEW Colab cell (any notebook). It reads your Drive 'football' folder and uploads it to R2 as data/...
 # Your R2 keys go in Colab Secrets first: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET.
 !pip -q install boto3

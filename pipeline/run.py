@@ -1,4 +1,4 @@
-"""PitchLab pipeline runner: runs the notebook's sections in order, outside Colab.
+"""Kwallo pipeline runner: runs the notebook's sections in order, outside Colab.
 
 Modes (set PITCHLAB_MODE):
   full     weekly: everything, including the heavy replays and tests (about 60-80 minutes)
@@ -40,7 +40,7 @@ def display(x):
 def main():
     t_start = time.time()
     os.makedirs(DATA, exist_ok=True)
-    print(f"PitchLab pipeline, mode '{MODE}', data in {DATA}")
+    print(f"Kwallo pipeline, mode '{MODE}', data in {DATA}")
     synced = storage.sync_down(DATA)
     order = json.load(open(os.path.join(HERE, "cells", "ORDER.json")))
     ns = {"__name__": "__pitchlab__", "display": display}

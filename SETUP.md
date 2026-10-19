@@ -1,6 +1,8 @@
-# PitchLab automation: one-time setup
+# Kwallo automation: one-time setup
 
 **Time needed:** about 1 to 1.5 hours, once. Everything is done in a web browser.
+
+> The bucket, database, Worker and GitHub project keep their internal name `pitchlab`: nobody outside sees them, so they don't need renaming.
 
 ## How the pieces fit together
 
@@ -8,7 +10,7 @@
 |---|---|---|
 | **GitHub** (a private project) | Runs the model on a schedule: weekly full run (Monday 03:00 UTC), daily refresh (05:00 UTC), and lineup-time runs | Free (2,000 minutes a month on private projects) |
 | **Cloudflare R2** (storage) | Holds all the data (what used to live in your Drive `football` folder) and the public data files for the site | Free up to 10 GB |
-| **Cloudflare Worker + D1** | Answers **@PitchLabAI_bot**, stores followers (chat IDs and choices only), and starts a lineup-time run about 70 minutes before kickoffs | Free |
+| **Cloudflare Worker + D1** | Answers **@kwalloBot**, stores followers (chat IDs and choices only), and starts a lineup-time run about 70 minutes before kickoffs | Free |
 | **Telegram** | Delivers the alerts | Free |
 
 Keys and passwords live only in GitHub's and Cloudflare's secret settings, never in the code.
@@ -53,7 +55,7 @@ In your browser, open this address, replacing the three parts in capitals (one l
 ```
 https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://YOUR-WORKER-ADDRESS/telegram&secret_token=YOUR_WEBHOOK_SECRET
 ```
-It should reply `"ok":true`. Then message **@PitchLabAI_bot** with `/start`: it should answer.
+It should reply `"ok":true`. Then message **@kwalloBot** with `/start`: it should answer.
 
 ## Step 7: Put the project on GitHub
 1. GitHub: **New repository** → name **`pitchlab`** → **Private** → Create.

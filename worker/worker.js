@@ -1,6 +1,6 @@
-// PitchLab Telegram bot (@PitchLabAI_bot) + subscriber list for the pipeline + lineup-time run trigger.
+// Kwallo Telegram bot (@kwalloBot) + subscriber list for the pipeline + lineup-time run trigger.
 // Stores only chat IDs and choices (D1). Informational alerts only: no bookmakers, 18+.
-const PRIVACY = "PitchLab stores only your Telegram chat ID and the teams/leagues and alert types you choose, to send you match alerts. " +
+const PRIVACY = "Kwallo stores only your Telegram chat ID and the teams/leagues and alert types you choose, to send you match alerts. " +
   "Nothing else is kept. Send /stop at any time to stop all alerts and delete your data. Alerts are model probabilities, not guarantees; 18+.";
 const HELP = "Commands:\n/follow [team or league] - follow\n/list - what you follow\n/settings - choose your alerts\n/unfollow - stop following one\n/stop - stop everything and delete your data\n/privacy - how your data is used";
 
@@ -72,7 +72,7 @@ async function handleUpdate(env, u) {
       const hit = list.find(x => x.slug === m[2]);
       return follow(env, chat, m[1], m[2], hit ? hit.name : m[2].replace(/-/g, " "));
     }
-    return reply(env, chat, `👋 Welcome to <b>PitchLab</b> match alerts.\nFollow a team or league with /follow, e.g. <code>/follow Arsenal</code>.\n\n${HELP}\n\n<i>${PRIVACY}</i>`);
+    return reply(env, chat, `👋 Welcome to <b>Kwallo</b> — football, decoded.\nFree match alerts for the teams and leagues you follow.\nFollow a team or league with /follow, e.g. <code>/follow Arsenal</code>.\n\n${HELP}\n\n<i>${PRIVACY}</i>`);
   }
   if (cmd === "/follow") {
     if (!arg) return reply(env, chat, "Which team or league? For example: <code>/follow Arsenal</code> or <code>/follow Premier League</code>");
@@ -124,7 +124,7 @@ async function maybeDispatch(env, now = Date.now()) {
   const seen = await env.DB.prepare("SELECT slot FROM dispatched WHERE slot = ?").bind(slot).first();
   if (seen) return "already started for " + slot;
   const r = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/lineups.yml/dispatches`, {
-    method: "POST", headers: { authorization: `Bearer ${env.GITHUB_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "pitchlab-bot" },
+    method: "POST", headers: { authorization: `Bearer ${env.GITHUB_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "kwallo-bot" },
     body: JSON.stringify({ ref: "main" }) });
   if (r.ok || r.status === 204) {
     await env.DB.prepare("INSERT OR IGNORE INTO dispatched (slot, at) VALUES (?, ?)").bind(slot, new Date(now).toISOString()).run();
@@ -145,7 +145,7 @@ export default {
       if (request.headers.get("X-Pipeline-Key") !== env.PIPELINE_KEY) return new Response("forbidden", { status: 403 });
       return Response.json(await subscribers(env));
     }
-    if (url.pathname === "/") return new Response("PitchLab bot is running.");
+    if (url.pathname === "/") return new Response("Kwallo bot is running.");
     return new Response("not found", { status: 404 });
   },
   async scheduled(event, env, ctx) {

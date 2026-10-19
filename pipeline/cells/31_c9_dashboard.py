@@ -1,6 +1,9 @@
 # ===================== 10. BUILD THE DASHBOARD =====================
 import json
-from IPython.display import HTML
+try:
+    from IPython.display import HTML
+except ImportError:          # v28: not needed outside Colab
+    HTML = lambda x: x
 
 def records(df, cols=None):
     if df is None or len(df) == 0:
@@ -80,23 +83,23 @@ DASHBOARD_HTML = r'''<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PitchLab: match and score predictions</title>
+<title>Kwallo: football, decoded.</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet">
 <style>
 :root {
-  /* PitchLab: mint #3ED6A3, deep green #0C352D, black, near-white, sage. Dark is the main look; light for phones set to light mode. */
-  --bg: #F4F8F6; --surface: #FFFFFF; --ink: #0C352D; --muted: #4E6B61; --line: #D3E2DB;
-  --home: #1E9C74; --draw: #9DB3A8; --away: #0C352D; --warn: #9A6212; --warn-bg: #FBF1DE; --brand: #3ED6A3;
+  /* Kwallo: deep green-black #0B201B and mint #94E0C2. Dark is the main look; light for phones set to light mode. */
+  --bg: #F3F8F6; --surface: #FFFFFF; --ink: #0B201B; --muted: #4A6B60; --line: #D3E2DB;
+  --home: #2E8F6A; --draw: #9DB3A8; --away: #0B201B; --warn: #9A6212; --warn-bg: #FBF1DE; --brand: #2E8F6A;
   --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
   --body: "Source Sans 3", "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --bg: #000000; --surface: #0D1311; --ink: #F8F8F8; --muted: #B8CCB9; --line: #1F2E29;
-    --home: #3ED6A3; --draw: #7F948A; --away: #E9EFEC; --warn: #E3AE55; --warn-bg: #2B2414; --brand: #3ED6A3;
+    --bg: #0B201B; --surface: #102A24; --ink: #F2FAF6; --muted: #A9C9BB; --line: #1E3D35;
+    --home: #94E0C2; --draw: #6F8F84; --away: #E9F2EE; --warn: #E3AE55; --warn-bg: #2B2414; --brand: #94E0C2;
   }
 }
 * { box-sizing: border-box; }
@@ -226,7 +229,7 @@ details.report pre { margin: 0; padding: 4px 16px 12px; white-space: pre-wrap; f
 <body>
 <div class="wrap">
   <header>
-    <h1><svg viewBox="0 0 64 64" width="38" height="38" aria-hidden="true" style="vertical-align:-6px;margin-right:8px"><path d="M24 6h16M26 6v18L10 52a4 4 0 0 0 3.5 6h37A4 4 0 0 0 54 52L38 24V6" fill="none" stroke="var(--ink)" stroke-width="3" stroke-linejoin="round"/><path d="M17 40h30l6 12a3 3 0 0 1-2.6 4.5H13.6A3 3 0 0 1 11 52z" fill="#3ED6A3"/><line x1="14" y1="48" x2="50" y2="48" stroke="#0C352D" stroke-width="1.6"/><circle cx="32" cy="48" r="4.5" fill="none" stroke="#0C352D" stroke-width="1.6"/><circle cx="30" cy="14" r="1.8" fill="none" stroke="#3ED6A3" stroke-width="1.4"/><circle cx="34" cy="20" r="1.8" fill="none" stroke="#3ED6A3" stroke-width="1.4"/></svg><span style="color:var(--ink)">Pitch</span><span style="color:var(--brand)">Lab</span></h1><div class="hint" style="margin:-6px 0 6px">Match and score predictions</div>
+    <h1 style="letter-spacing:0.01em"><svg viewBox="0 0 120 120" width="40" height="40" aria-hidden="true" style="vertical-align:-9px;margin-right:10px" fill="none" stroke="var(--brand)" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"><path d="M60 21.5 C53 17 42 17.5 42.5 29.5 C33 28.5 27 35 30 43 C22 46 19 55 24 60 C19 66 22 75 30 77.5 C28 86 34 92 42.5 90.5 C43 101 53 102.5 60 98.5"/><path d="M60 21.5 A38.5 38.5 0 0 1 60 98.5 Z"/><path d="M56 33.5 C47 34.5 43.5 39.5 43.5 46 C43.5 50 46 52 49.5 52.5 M55.5 48.5 C52.5 49.5 51.5 52 51.5 54.5"/><path d="M56 63.5 C47 64.5 43.5 69 43 74 C42.5 78 45.5 80 49.5 80.5 M56 75.5 C53.5 77 53.5 80 54 83"/><path d="M60 40 H72 V35 M60 54.5 H76.5 M60 68.5 H74 M60 81 H69.5 V86.5"/><polygon points="72.0,27.1 75.7,29.8 74.3,34.2 69.7,34.2 68.3,29.8"/><polygon points="80.5,51.1 84.2,53.8 82.8,58.2 78.2,58.2 76.8,53.8"/><polygon points="77.5,65.1 81.2,67.8 79.8,72.2 75.2,72.2 73.8,67.8"/><polygon points="69.5,86.6 73.2,89.3 71.8,93.7 67.2,93.7 65.8,89.3"/></svg><span style="color:var(--ink);text-transform:lowercase">kwallo</span></h1><div class="hint" style="margin:-6px 0 6px">football, decoded.</div>
     <p class="sub" id="sub"></p>
     <div id="health"></div>
   </header>

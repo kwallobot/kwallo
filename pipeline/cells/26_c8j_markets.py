@@ -205,7 +205,9 @@ print(f"Share of goals scored by minute 30: {100 * GOAL_SHARE_30:.1f}%")
 # replay for calibration: recent replayed matches with lineups
 if RUN_REPLAYS and "base" in globals() and len(base) and "mf" in globals() and len(mf) and "L" in globals():
     bt_p = base.merge(mf[["League", "Date", "HomeTeam", "AwayTeam", "event_id", "home_id", "away_id"]], on=["League", "Date", "HomeTeam", "AwayTeam"]).sort_values("Date").tail(900)
-    act_ = L.set_index(["event_id", "player_id"])[["shots", "sot", "fouls", "saves"]].apply(pd.to_numeric, errors="coerce").fillna(0)
+    # v28: one row per player per match (the lineup data can list a player twice in a match, which broke this replay)
+    act_ = L[["event_id", "player_id"]].assign(**{c_: pd.to_numeric(L[c_], errors="coerce").fillna(0) if c_ in L else 0.0
+                                                   for c_ in ["shots", "sot", "fouls", "saves"]}).groupby(["event_id", "player_id"]).max()
     first_goal = {}
     if "events_all" in globals() and len(events_all):
         gl_ = events_all[events_all["type"].astype(str).str.match(r"^(Goal|Penalty - Scored)")].dropna(subset=["minute"]).sort_values("minute")

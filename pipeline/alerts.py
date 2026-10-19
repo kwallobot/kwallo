@@ -1,4 +1,4 @@
-"""Sends match alerts to @PitchLabAI_bot followers, after each pipeline run.
+"""Sends match alerts to @kwalloBot followers, after each pipeline run.
 Two alerts per match: a PREVIEW (about a day before: probabilities, top angle, expected lineups) and LINEUPS (once the
 official lineups are out, about 75 minutes before kickoff in the Premier League). Each is sent once per person per match.
 Informational only: probabilities and fair odds, no bookmakers."""
@@ -42,7 +42,7 @@ def preview_text(d, site):
         lines += [f"Expected XI {html.escape(m['Home'])}: {html.escape(_xi_line(xi, 'home'))}", f"Expected XI {html.escape(m['Away'])}: {html.escape(_xi_line(xi, 'away'))}"]
     if site:
         lines.append(f'<a href="{site.rstrip("/")}/match/{m["slug"]}">Full preview</a>')
-    lines.append("<i>Model probabilities, not guarantees. 18+.</i>")
+    lines.append("<i>Kwallo · football, decoded. Model probabilities, not guarantees. 18+.</i>")
     return "\n".join(lines)
 
 def lineups_text(d, site):
