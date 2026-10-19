@@ -12,6 +12,8 @@ def est_k(y, mu):
     return float(np.clip(np.mean((y - mu) ** 2) / max(np.mean(mu), 1e-9), 1.0, 10.0))
 def band_check(name, p, y, dates):
     """Isotonic correction learned on the earlier half, checked on the later half (same rule as the player probabilities)."""
+    p, y, dates = np.asarray(p, float), np.asarray(y, float), np.asarray(dates)
+    ok_ = np.isfinite(p) & np.isfinite(y); p, y, dates = p[ok_], y[ok_], dates[ok_]
     r_ = calibrate_player(name, p, y, dates, min_cases=500) if len(p) >= 500 else _small_check(name, p, y)
     MARKET_TRUST[name] = r_
     if r_.get("table"):
