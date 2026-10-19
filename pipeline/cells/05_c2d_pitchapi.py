@@ -293,8 +293,8 @@ if PA_KEY:
             if time.time() - t2 > PITCHAPI_SHOTS_MINUTES * 60:
                 break
             sh_ = pa(f"/v1/matches/{r_.id}/shots") or {}
-            for per in sh_.get("periods", []):
-                for x_ in per.get("shots", []):
+            for per in (sh_.get("periods") or []):
+                for x_ in (per.get("shots") or []):
                     shots_rows.append({"match_id": str(r_.id), "team_id": x_.get("team_id"), "minute": x_.get("minute"), "xg": x_.get("expected_goals"),
                                        "xgot": x_.get("expected_goals_on_target"), "situation": x_.get("situation"), "body": x_.get("shot_type") or x_.get("body_part"),
                                        "outcome": x_.get("event_type") or x_.get("outcome"), "x": x_.get("x"), "y": x_.get("y"), "player": (x_.get("player") or {}).get("name")})
