@@ -7,7 +7,8 @@ SCORER_MIN_PROB = 0.05
 SHORT_C = {"Champions League": "UCL", "Europa League": "UEL", "Conference League": "UECL"}
 
 
-RUN_REPLAYS = globals().get("RUN_REPLAYS", True)         # v27: heavy replays (calibration, lineup model) only in full runs
+RUN_REPLAYS = globals().get("RUN_REPLAYS", True)
+GROUP_TRUST = {}                                        # v32: per league group trust labels         # v27: heavy replays (calibration, lineup model) only in full runs
 
 # ---------- v26: trust rule = within 3 points OR two standard errors (whichever is larger), and stable across runs ----------
 TRUST_PATH = f"{SAVE_DIR}/trust_state.json"
@@ -37,6 +38,26 @@ def stable_trust(name, passed):
 # ---------- v24: calibration correction and a stricter trust rule for player probabilities ----------
 from sklearn.isotonic import IsotonicRegression
 PLAYER_CAL = {}
+# v32: calibration by league group, so thinner data in one region can't blur another's corrections
+CAL_GROUPS = {"europe_top": {"Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions League", "Europa League", "Conference League"},
+              "americas": {"MLS", "Liga MX", "Argentina Liga Profesional", "Brasileirão Série A", "Brasileirão Série B", "Bolivia División Profesional"},
+              "africa_me": {"Saudi Pro League", "South African Premiership", "NPFL (Nigeria)", "Egyptian Premier League"}}
+CAL_GROUP_NAMES = {"europe_top": "Europe's big leagues and cups", "europe_other": "other European leagues", "americas": "the Americas", "africa_me": "Africa and the Middle East"}
+_PA_CC = {"ENG": "europe_top", "ESP": "europe_top", "GER": "europe_top", "ITA": "europe_top", "FRA": "europe_top",
+          "USA": "americas", "MEX": "americas", "ARG": "americas", "BRA": "americas", "BOL": "americas", "KSA": "africa_me", "RSA": "africa_me", "EGY": "africa_me"}
+def cal_group(comp):
+    c_ = str(comp)
+    if ":" in c_ and c_.split(":")[0].isupper():                  # PitchAPI's "ENG:Premier League" style
+        return _PA_CC.get(c_.split(":")[0], "europe_other")
+    for g_, s_ in CAL_GROUPS.items():
+        if c_ in s_:
+            return g_
+    return "europe_other"
+def group_key(name, comp, store=None):
+    """The group's own correction or label if it has one, else the overall one."""
+    k_ = f"{name}|{cal_group(comp)}" if comp is not None else name
+    return k_ if k_ in (store if store is not None else PLAYER_CAL) else name
+
 def calibrate_player(name, preds, acts, dates, min_cases=500):
     """v25: learn a correction on the earlier half of the replay and check it on the later half. Two kinds are tried, a
     step-shaped one (isotonic) and a smooth one (a straight line on the log-odds scale), and the one that matches the later
@@ -83,7 +104,8 @@ def calibrate_player(name, preds, acts, dates, min_cases=500):
     print(f"{name}: after correction ({kind}), {'passed' if passed else 'failed'} this run (worst band {max(worst, 0):.1f} vs allowance 3.0{why_}), "
           f"skill {100 * res['skill']:+.1f}% -> {'TRUSTED' if res['trusted'] else 'experimental'}{'' if res['trusted'] == passed else ' (label changes after two runs in a row)'}.")
     return res
-def apply_player_cal(name, p):
+def apply_player_cal(name, p, comp=None):
+    name = group_key(name, comp)
     c_ = PLAYER_CAL.get(name)
     if not c_:
         return p
@@ -683,24 +705,24 @@ if PLAYER_MODEL and len(lu):
         for k_, v_ in SCORERS.items():
             for side_ in ("home", "away"):
                 for p_ in v_.get(side_, []):
-                    p_["p"] = apply_player_cal("Goalscorers", p_["p"])
+                    p_["p"] = apply_player_cal("Goalscorers", p_["p"], k_[0] if isinstance(k_, tuple) else None)
                 for p_ in v_.get(side_ + "_assist", []):
-                    p_["p"] = apply_player_cal("Assisters", p_["p"])
+                    p_["p"] = apply_player_cal("Assisters", p_["p"], k_[0] if isinstance(k_, tuple) else None)
     if RUN_REPLAYS and "base" in globals() and len(base) and "mf" in globals() and len(mf):
         bt_ = base.merge(mf[["League", "Date", "HomeTeam", "AwayTeam", "event_id", "home_id", "away_id"]], on=["League", "Date", "HomeTeam", "AwayTeam"], how="inner")
         bt_ = bt_.sort_values("Date").tail(1500)                  # the most recent 1,500 matches keeps this quick
         goals_by_player = L[L["goals"] > 0].groupby(["event_id", "player_id"])["goals"].sum()
         assists_by_player = L[L["assists"] > 0].groupby(["event_id", "player_id"])["assists"].sum()
-        preds_, acts_, apreds_, aacts_, pdates_, adates_ = [], [], [], [], [], []
+        preds_, acts_, apreds_, aacts_, pdates_, adates_, pcomp_, acomp_ = [], [], [], [], [], [], [], []
         for r_ in bt_.itertuples():
             for tid_, lam_ in [(str(r_.home_id), r_.ExpHome), (str(r_.away_id), r_.ExpAway)]:
                 pl_ = scorer_probs(tid_, pd.Timestamp(r_.Date), float(lam_))
                 if pl_.empty:
                     continue
-                preds_ += list(pl_["p_score"].values); pdates_ += [np.datetime64(pd.Timestamp(r_.Date))] * len(pl_)
+                preds_ += list(pl_["p_score"].values); pdates_ += [np.datetime64(pd.Timestamp(r_.Date))] * len(pl_); pcomp_ += [getattr(r_, "Competition", getattr(r_, "League", None))] * len(pl_)
                 acts_ += [float(goals_by_player.get((str(r_.event_id), pid_), 0) > 0) for pid_ in pl_.index]
                 pla_ = scorer_probs(tid_, pd.Timestamp(r_.Date), float(lam_), stat="assists")
-                apreds_ += list(pla_["p_score"].values); adates_ += [np.datetime64(pd.Timestamp(r_.Date))] * len(pla_)
+                apreds_ += list(pla_["p_score"].values); adates_ += [np.datetime64(pd.Timestamp(r_.Date))] * len(pla_); acomp_ += [getattr(r_, "Competition", getattr(r_, "League", None))] * len(pla_)
                 aacts_ += [float(assists_by_player.get((str(r_.event_id), pid_), 0) > 0) for pid_ in pla_.index]
         if len(preds_) >= 2000:
             pr_, ac_ = np.array(preds_), np.array(acts_)
@@ -736,6 +758,14 @@ if PLAYER_MODEL and len(lu):
                 display(pd.DataFrame(atab_).round(1))
             sc_fix = calibrate_player("Goalscorers", preds_, acts_, pdates_)
             as_fix = calibrate_player("Assisters", apreds_, aacts_, adates_) if len(apreds_) else {"trusted": False}
+            for nm_, P_, A_, D_, C_ in [("Goalscorers", preds_, acts_, pdates_, pcomp_), ("Assisters", apreds_, aacts_, adates_, acomp_)]:
+                grp_ = np.array([cal_group(c_) for c_ in C_])
+                for gg_ in sorted(set(grp_)):
+                    sel_ = grp_ == gg_
+                    if sel_.sum() >= 2000:
+                        r_g = calibrate_player(f"{nm_}|{gg_}", np.array(P_)[sel_], np.array(A_)[sel_], np.array(D_)[sel_])
+                        GROUP_TRUST[f"{nm_}|{gg_}"] = bool(r_g.get("trusted"))
+                        print(f"  {nm_}, {CAL_GROUP_NAMES[gg_]}: {'trusted' if r_g.get('trusted') else 'experimental'} ({int(sel_.sum())} cases)")
             scorer_calibration["trusted"] = bool(sc_fix.get("trusted"))
             for nm_, fx_ in [("Goalscorers", sc_fix), ("Assisters", as_fix)]:
                 if fx_.get("table"):
@@ -750,9 +780,9 @@ if PLAYER_MODEL and len(lu):
             for k_, v_ in SCORERS.items():
                 for side_ in ("home", "away"):
                     for p_ in v_.get(side_, []):
-                        p_["p"] = apply_player_cal("Goalscorers", p_["p"])
+                        p_["p"] = apply_player_cal("Goalscorers", p_["p"], k_[0] if isinstance(k_, tuple) else None)
                     for p_ in v_.get(side_ + "_assist", []):
-                        p_["p"] = apply_player_cal("Assisters", p_["p"])
+                        p_["p"] = apply_player_cal("Assisters", p_["p"], k_[0] if isinstance(k_, tuple) else None)
             EXTRA_TABLES_EARLY = [{"title": "Goalscorer probabilities: calibration", "hint": f"Replayed on {len(pr_)} player-matches: when the model gave a player X% to score, how often did he? "
                                    f"Average error {err:.1f} points; {'trusted' if scorer_calibration['trusted'] else 'still experimental'}.", "rows": tab_}]
 

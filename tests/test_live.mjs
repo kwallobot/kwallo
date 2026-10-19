@@ -24,7 +24,9 @@ db.prepare("INSERT INTO subs (chat_id, kind, slug, name, created) VALUES (1, 'te
 db.prepare("INSERT INTO subs (chat_id, kind, slug, name, created) VALUES (2, 'league', 'premier-league', 'Premier League', '2026-10-20')").run();
 const goal = { type: { text: "Goal" }, scoringPlay: true, clock: { displayValue: "23'" }, team: { id: "1" }, athletesInvolved: [{ displayName: "Bukayo Saka" }, { displayName: "Martin Ødegaard" }] };
 const yellow = { type: { text: "Yellow Card" }, yellowCard: true, clock: { displayValue: "27'" }, team: { id: "2" }, athletesInvolved: [{ displayName: "Moisés Caicedo" }] };
-const steps = [[20, ev("in", "STATUS_FIRST_HALF", "20'", 0, 0, [2, 1], [1, 0], [])],
+const steps = [[-3, ev("pre", "STATUS_SCHEDULED", "0'", 0, 0, [0, 0], [0, 0], [])],
+               [1, ev("in", "STATUS_FIRST_HALF", "1'", 0, 0, [0, 0], [0, 0], [])],
+               [20, ev("in", "STATUS_FIRST_HALF", "20'", 0, 0, [2, 1], [1, 0], [])],
                [28, ev("in", "STATUS_FIRST_HALF", "28'", 1, 0, [3, 1], [2, 0], [goal, yellow])],
                [36, ev("in", "STATUS_FIRST_HALF", "36'", 1, 0, [8, 2], [4, 0], [goal, yellow])],
                [47, ev("in", "STATUS_HALFTIME", "45'+2'", 1, 0, [9, 3], [4, 1], [goal, yellow])],

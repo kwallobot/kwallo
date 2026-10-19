@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kwallo: football, decoded.</title>
+<meta name="description" content="Match predictions with honest probabilities and fair odds, lineups, player statistics and a public track record, across 30+ competitions.">
+<meta name="theme-color" content="#0B201B">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/" aria-label="Kwallo home"><img src="logo.svg" alt="" width="34" height="34"><span>kwallo</span></a>
+  <nav class="rail" aria-label="Main">
+    <a href="#/" data-nav="today">Today</a><a href="#/leagues" data-nav="leagues">Leagues</a><a href="#/angles" data-nav="angles">Best angles</a>
+    <a href="#/track" data-nav="track">Track record</a><a href="#/acca" data-nav="acca">Accumulator <b class="acca-count" hidden></b></a><a href="#/more" data-nav="more">More</a>
+  </nav>
+</header>
+<main id="app" tabindex="-1"><p class="loading">Loading today's matches…</p></main>
+<footer class="foot">
+  <p>Kwallo shows model probabilities, not guarantees. Odds are fair odds, the break-even price. 18+ only. If betting stops being fun, take a break.</p>
+  <p><a href="#/about">About</a> <a href="#/privacy">Privacy</a> <a href="#/terms">Terms</a> <a class="tg-channel" href="#">Telegram channel</a></p>
+</footer>
+<nav class="bottom" aria-label="Main">
+  <a href="#/" data-nav="today">Today</a><a href="#/leagues" data-nav="leagues">Leagues</a><a href="#/angles" data-nav="angles">Angles</a>
+  <a href="#/track" data-nav="track">Record</a><a href="#/more" data-nav="more">More</a>
+</nav>
+<script src="app.js"></script>
+</body>
+</html>

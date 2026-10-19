@@ -219,7 +219,7 @@ def channel_posts(data_dir, mode):
             if len(yv) >= 3:
                 rows = [f"{'✅' if r.won > 0 else '❌'} {html.escape(str(r.Home))} v {html.escape(str(r.Away))}: {html.escape(str(r.Bet))} ({_pct(r.p)})" for r in yv.head(20).itertuples()]
                 txt = (f"🏁 <b>Yesterday's top angles</b>: {int(yv['won'].sum())} of {len(yv)} landed "
-                       f"({100 * yv['won'].mean():.0f}% vs {100 * yv['p'].mean():.0f}% the model expected)\n\n" + "\n".join(rows)
+                       f"({100 * yv['won'].mean():.0f}% vs {100 * yv['p'].mean():.0f}% the model expected)\n\n" + "\n".join(rows) + (f'\n\n<a href="{os.environ.get("SITE_URL", "").rstrip("/")}/#/track">Full track record</a>' if os.environ.get("SITE_URL") else "")
                        + "\n\n<i>A hit rate close to the expected one means the probabilities are honest. 18+.</i>")
                 n += _post(token, channel, txt[:4000], sent, f"results|{yday}")
             # 4. Mondays (full run): the week's track record
@@ -229,7 +229,8 @@ def channel_posts(data_dir, mode):
                 if len(wk) >= 10:
                     txt = (f"📊 <b>Kwallo weekly track record</b>\nLast 7 days: top angles landed {100 * wk['won'].mean():.0f}% "
                            f"(the model expected {100 * wk['p'].mean():.0f}%), {len(wk)} picks.\nSince launch: {100 * allv['won'].mean():.0f}% vs "
-                           f"{100 * allv['p'].mean():.0f}% expected, {len(allv)} picks.\n\n<i>We publish every pick, hits and misses. 18+.</i>")
+                           f"{100 * allv['p'].mean():.0f}% expected, {len(allv)} picks.\n\n<i>We publish every pick, hits and misses. 18+.</i>"
+                           + (f'\n<a href="{os.environ.get("SITE_URL", "").rstrip("/")}/#/track">Full track record</a>' if os.environ.get("SITE_URL") else ""))
                     n += _post(token, channel, txt, sent, f"weekly|{now:%G-W%V}")
     sent = {k: s for k, s in sent.items() if pd.Timestamp(s) > now - pd.Timedelta(days=30)}
     json.dump(sent, open(log_path, "w"))

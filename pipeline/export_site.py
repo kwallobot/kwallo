@@ -107,3 +107,19 @@ def export(ns, data_dir, mode):
         open(local, "w").write(body)
         n_up += storage.put_public(key, body.encode("utf-8"))
     print(f"Export: {len(matches)} matches, {len(details)} match files, {len(teams)} teams written" + (f"; {n_up} uploaded to R2." if n_up else " (local only)."))
+    # v32: the website's other pages, each file uploaded only when its contents changed
+    def write(key, obj):
+        body = json.dumps(obj, ensure_ascii=False, allow_nan=False, default=str)
+        local = os.path.join(data_dir, key)
+        if os.path.exists(local) and open(local, encoding="utf-8").read() == body:
+            return 0
+        os.makedirs(os.path.dirname(local), exist_ok=True)
+        open(local, "w", encoding="utf-8").write(body)
+        storage.put_public(key, body.encode("utf-8"))
+        return 1
+    try:
+        import export_pages
+        export_pages.build(ns, data_dir, mode, write, slug, clean)
+    except Exception:
+        import traceback; traceback.print_exc()
+        print("Website pages: failed this run (match pages and the bot are unaffected).")

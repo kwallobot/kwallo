@@ -10,7 +10,7 @@ def est_k(y, mu):
     """Spread as a variance-to-mean ratio (what over_prob expects): 1 = Poisson, above 1 = more spread out."""
     y, mu = np.asarray(y, float), np.asarray(mu, float)
     return float(np.clip(np.mean((y - mu) ** 2) / max(np.mean(mu), 1e-9), 1.0, 10.0))
-def band_check(name, p, y, dates):
+def band_check(name, p, y, dates, groups=None):
     """Isotonic correction learned on the earlier half, checked on the later half (same rule as the player probabilities)."""
     p, y, dates = np.asarray(p, float), np.asarray(y, float), np.asarray(dates)
     ok_ = np.isfinite(p) & np.isfinite(y); p, y, dates = p[ok_], y[ok_], dates[ok_]      # v31: skip incomplete matches
@@ -18,6 +18,20 @@ def band_check(name, p, y, dates):
     MARKET_TRUST[name] = r_
     if r_.get("table"):
         market_tables.append({"title": f"{name}: calibration", "hint": f"{'Trusted' if r_['trusted'] else 'Experimental'}; worst band gap {r_.get('worst_gap', 0):.1f} points.", "rows": r_["table"]})
+    return r_
+
+_band_check_overall = band_check
+def band_check(name, p, y, dates, groups=None):
+    r_ = _band_check_overall(name, p, y, dates)
+    if groups is not None and len(groups) == len(p):
+        grp_ = np.array([cal_group(c_) for c_ in groups])
+        p_a, y_a, d_a = np.asarray(p, float), np.asarray(y, float), np.asarray(dates)
+        for gg_ in sorted(set(grp_)):
+            sel_ = grp_ == gg_
+            if sel_.sum() >= 300:
+                n_tab = len(market_tables)
+                _band_check_overall(f"{name}|{gg_}", p_a[sel_], y_a[sel_], d_a[sel_])
+                del market_tables[n_tab:]                          # per-group tables stay out of the scorecard (labels are listed instead)
     return r_
 def _small_check(name, p, y):
     """For markets with fewer than 2,000 cases: plain calibration bands, no correction."""
@@ -44,9 +58,13 @@ HIDE_MARKETS = {"Goalkeeper 3+ saves"}                       # v27: no skill yet
 def add_market(key_, label, p, family, trust_name, code=None, corrected=False):
     if trust_name in HIDE_MARKETS:
         return
+    comp_ = key_[0] if isinstance(key_, tuple) else None
     if not corrected:
-        p = apply_player_cal(trust_name, p)                 # v25: the correction learned in the test, if any
-    tr_ = MARKET_TRUST.get(trust_name, {}).get("trusted") or (trust_name == "Goalscorers" and scorer_calibration.get("trusted"))
+        p = apply_player_cal(trust_name, p, comp_)          # v32: the match's league group correction if it has one
+    tn_ = group_key(trust_name, comp_, MARKET_TRUST)
+    tr_ = MARKET_TRUST.get(tn_, {}).get("trusted") or (tn_ == "Goalscorers" and scorer_calibration.get("trusted"))
+    if trust_name in ("Goalscorers", "Assisters") and f"{trust_name}|{cal_group(comp_)}" in GROUP_TRUST:
+        tr_ = GROUP_TRUST[f"{trust_name}|{cal_group(comp_)}"]
     MARKETS.setdefault(key_, []).append({"Bet": label, "p": float(p), "fair": float(1 / max(p, 1e-6)), "family": family,
                                           "trusted": bool(tr_), "test": trust_name, "code": code})
 
@@ -61,7 +79,7 @@ keyof = lambda r_: (r_["Competition"], str(r_["Date"])[:10], r_["Home"], r_["Awa
 # ---------- 1. team shots, shots on target and fouls (main leagues) ----------
 STATS = {"shots": ("HS", "AS", "shots"), "sot": ("HST", "AST", "shots on target"), "fouls": ("HF", "AF", "fouls")}
 for st_key, (ch, ca, word) in STATS.items():
-    rows_p, rows_y, rows_d = {"tot": [], "h": [], "a": []}, {"tot": [], "h": [], "a": []}, []
+    rows_p, rows_y, rows_d, rows_l = {"tot": [], "h": [], "a": []}, {"tot": [], "h": [], "a": []}, [], []
     live_parts = []
     for lg_ in LEAGUES.values():
         lg = all_matches[all_matches["League"] == lg_].dropna(subset=[ch, ca])
@@ -85,7 +103,7 @@ for st_key, (ch, ca, word) in STATS.items():
             for part, mu_, y_ in [("tot", mh_ + ma_, games[ch] + games[ca]), ("h", mh_, games[ch]), ("a", ma_, games[ca])]:
                 rows_p[part] += list(nb_over(mu_, k_, lines_[part]))
                 rows_y[part] += list((y_.values > lines_[part]).astype(float))
-            rows_d += [np.datetime64(d_) for d_ in games["Date"]]
+            rows_d += [np.datetime64(d_) for d_ in games["Date"]]; rows_l += [lg_] * len(games)
         # live
         fx_ = upc_m[upc_m["Competition"] == lg_]
         if len(fx_):
@@ -100,7 +118,7 @@ for st_key, (ch, ca, word) in STATS.items():
                 live_parts.append((g_, mh_, ma_, k_, lines_))
     for part, lab in [("tot", f"Total {word}"), ("h", f"Home {word}"), ("a", f"Away {word}")]:
         if len(rows_p[part]) >= 300:
-            band_check(f"{lab} over the league line", rows_p[part], rows_y[part], np.array(rows_d))
+            band_check(f"{lab} over the league line", rows_p[part], rows_y[part], np.array(rows_d), rows_l)
     for g_, mh_, ma_, k_, lines_ in live_parts:
         for i_, r_ in enumerate(g_.to_dict("records")):
             k0 = (r_["Competition"], str(r_["Date"])[:10], r_["HomeTeam"], r_["AwayTeam"])
@@ -134,15 +152,15 @@ def ht_probs(eh, ea, f_):
 if RUN_REPLAYS and RUN_BACKTEST and bt_scored is not None and len(bt_scored) and HT_SHARE:
     bh_ = bt_scored[bt_scored["Competition"].isin(HT_SHARE)].merge(all_matches[["League", "Date", "HomeTeam", "AwayTeam", "HTHG", "HTAG"]].rename(
         columns={"League": "Competition", "HomeTeam": "Home", "AwayTeam": "Away"}), on=["Competition", "Date", "Home", "Away"]).dropna(subset=["HTHG", "HTAG", "ExpHome"])
-    pd_, yd_, pb_, yb_, dd_ = [], [], [], [], []
+    pd_, yd_, pb_, yb_, dd_, cc_ = [], [], [], [], [], []
     for r_ in bh_.itertuples():
         ht, bh2, _ = ht_probs(r_.ExpHome, r_.ExpAway, HT_SHARE[r_.Competition])
         pd_.append(ht["D"]); yd_.append(float(r_.HTHG == r_.HTAG))
         pb_.append(bh2); yb_.append(float((r_.HTHG + r_.HTAG > 0) and (r_.FTHG + r_.FTAG - r_.HTHG - r_.HTAG > 0)))
-        dd_.append(np.datetime64(r_.Date))
+        dd_.append(np.datetime64(r_.Date)); cc_.append(r_.Competition)
     if len(pd_) >= 300:
-        band_check("Half-time draw", pd_, yd_, np.array(dd_))
-        band_check("Goal in both halves", pb_, yb_, np.array(dd_))
+        band_check("Half-time draw", pd_, yd_, np.array(dd_), cc_)
+        band_check("Goal in both halves", pb_, yb_, np.array(dd_), cc_)
 for r_ in upc_m.to_dict("records"):
     f_ = HT_SHARE.get(r_["Competition"])
     if f_ is None:
@@ -216,7 +234,7 @@ if RUN_REPLAYS and "base" in globals() and len(base) and "mf" in globals() and l
         for eid_, g_ in gl_.groupby("event_id"):
             first_goal[str(eid_)] = (str(g_["players"].iloc[0]).split("|")[0], float(g_["minute"].iloc[0]))
     P = {k: [] for k in ["shot1", "shot2", "sot1", "foul1", "save3", "fg", "fg30", "pen"]}
-    Y = {k: [] for k in P}; Dd = {k: [] for k in P}
+    Y = {k: [] for k in P}; Dd = {k: [] for k in P}; Gl = {k: [] for k in P}
     for r_ in bt_p.itertuples():
         d_ = pd.Timestamp(r_.Date)
         lam_tot = r_.ExpHome + r_.ExpAway
@@ -232,20 +250,20 @@ if RUN_REPLAYS and "base" in globals() and len(base) and "mf" in globals() and l
                     continue
                 for k_, p_, y_ in [("shot1", 1 - np.exp(-row_.lam_shots), a_["shots"] >= 1), ("shot2", 1 - np.exp(-row_.lam_shots) * (1 + row_.lam_shots), a_["shots"] >= 2),
                                    ("sot1", 1 - np.exp(-row_.lam_sot), a_["sot"] >= 1), ("foul1", 1 - np.exp(-row_.lam_fouls), a_["fouls"] >= 1)]:
-                    P[k_].append(p_); Y[k_].append(float(y_)); Dd[k_].append(np.datetime64(d_))
+                    P[k_].append(p_); Y[k_].append(float(y_)); Dd[k_].append(np.datetime64(d_)); Gl[k_].append(r_.League)
                 if row_.lam_saves > 0:
-                    P["save3"].append(1 - _pp.cdf(2, row_.lam_saves)); Y["save3"].append(float(a_["saves"] >= 3)); Dd["save3"].append(np.datetime64(d_))
+                    P["save3"].append(1 - _pp.cdf(2, row_.lam_saves)); Y["save3"].append(float(a_["saves"] >= 3)); Dd["save3"].append(np.datetime64(d_)); Gl["save3"].append(r_.League)
         if fg_ is not None or lam_tot > 0:
-            P["fg30"].append(1 - np.exp(-lam_tot * GOAL_SHARE_30)); Y["fg30"].append(float(fg_ is not None and fg_[1] <= 30)); Dd["fg30"].append(np.datetime64(d_))
+            P["fg30"].append(1 - np.exp(-lam_tot * GOAL_SHARE_30)); Y["fg30"].append(float(fg_ is not None and fg_[1] <= 30)); Dd["fg30"].append(np.datetime64(d_)); Gl["fg30"].append(r_.League)
         rate_ = pen_rate.get(code_of_comp.get(r_.League, ""), np.nan)
         if np.isfinite(rate_):
             P["pen"].append(1 - np.exp(-rate_)); Y["pen"].append(float(any(str(t_).startswith("Penalty - Scored") for t_ in
-                                                                     events_all.loc[events_all["event_id"].astype(str) == str(r_.event_id), "type"]))); Dd["pen"].append(np.datetime64(d_))
+                                                                     events_all.loc[events_all["event_id"].astype(str) == str(r_.event_id), "type"]))); Dd["pen"].append(np.datetime64(d_)); Gl["pen"].append(r_.League)
     names_ = {"shot1": "Player 1+ shot", "shot2": "Player 2+ shots", "sot1": "Player 1+ shot on target", "foul1": "Player 1+ foul committed",
               "save3": "Goalkeeper 3+ saves", "fg30": "First goal within 30 minutes", "pen": "A penalty scored"}
     for k_, nm_ in names_.items():
         if len(P[k_]) >= 300:
-            band_check(nm_, P[k_], Y[k_], np.array(Dd[k_]))
+            band_check(nm_, P[k_], Y[k_], np.array(Dd[k_]), Gl[k_])
 # live player props and first goalscorer
 pm_ids = []
 if "fixtures" in globals() and len(fixtures) and "home_id" in fixtures:
@@ -302,7 +320,7 @@ if "THROW_LONG" in globals() and len(THROW_LONG) >= 600 and "League" in THROW_LO
     k_thr = est_k(hm_["total"], hm_["mu"])
     if RUN_REPLAYS and len(hm_) >= 300:
         band_check("Total throw-ins over the league line", np.array([nb_over(m_, k_thr, l_) for m_, l_ in zip(hm_["mu"], hm_["line"])]),
-                   (hm_["total"] > hm_["line"]).astype(float).values, hm_["Date"].values.astype("datetime64[D]"))
+                   (hm_["total"] > hm_["line"]).astype(float).values, hm_["Date"].values.astype("datetime64[D]"), hm_["League"].values)
     latest_ = tl_.groupby("Team")[["own", "against"]].apply(lambda d_: d_.tail(8).mean()).to_dict("index")
     team_league = tl_.groupby("Team")["League"].last().to_dict()
     lg_mean = hm_.groupby("League")["total"].mean().to_dict()
@@ -342,11 +360,11 @@ def count_market(stat_, label_, family_):
     dates_ = hm_["Date"].values.astype("datetime64[D]")
     if RUN_REPLAYS:
         band_check(f"Total {label_} over the league line", np.array([nb_over(a + b, k_t, lines_t[l]) for a, b, l in zip(hm_["mu_h"], hm_["mu_a"], hm_["League"])]),
-                   (hm_["total"] > hm_["League"].map(lines_t)).astype(float).values, dates_)
+                   (hm_["total"] > hm_["League"].map(lines_t)).astype(float).values, dates_, hm_["League"].values)
         band_check(f"Home {label_} over the league line", np.array([nb_over(a, k_h, lines_h[l]) for a, l in zip(hm_["mu_h"], hm_["League"])]),
-                   (hm_["own"] > hm_["League"].map(lines_h)).astype(float).values, dates_)
+                   (hm_["own"] > hm_["League"].map(lines_h)).astype(float).values, dates_, hm_["League"].values)
         band_check(f"Away {label_} over the league line", np.array([nb_over(a, k_a, lines_a[l]) for a, l in zip(hm_["mu_a"], hm_["League"])]),
-                   (hm_["against"] > hm_["League"].map(lines_a)).astype(float).values, dates_)
+                   (hm_["against"] > hm_["League"].map(lines_a)).astype(float).values, dates_, hm_["League"].values)
     latest_ = cl_.groupby("Team")[["own", "against"]].apply(lambda d_: d_.tail(8).mean()).to_dict("index")
     team_lg = cl_.groupby("Team")["League"].last().to_dict()
     lgm_h, lgm_a = hm_.groupby("League")["own"].mean().to_dict(), hm_.groupby("League")["against"].mean().to_dict()
@@ -389,8 +407,8 @@ if os.path.exists(PLP_) and len(PA_TACTICS) if "PA_TACTICS" in globals() else Fa
         test_ = pp_.dropna(subset=["per90_prev", "min_prev"])
         lam_ = test_["per90_prev"] * test_["min_prev"] / 90
         if RUN_REPLAYS and len(test_) >= 2000:
-            band_check("Player 1+ tackle", (1 - np.exp(-lam_)).values, (test_["tackles"] >= 1).astype(float).values, test_["Date"].values.astype("datetime64[D]"))
-            band_check("Player 2+ tackles", (1 - np.exp(-lam_) * (1 + lam_)).values, (test_["tackles"] >= 2).astype(float).values, test_["Date"].values.astype("datetime64[D]"))
+            band_check("Player 1+ tackle", (1 - np.exp(-lam_)).values, (test_["tackles"] >= 1).astype(float).values, test_["Date"].values.astype("datetime64[D]"), test_["league"].values)
+            band_check("Player 2+ tackles", (1 - np.exp(-lam_) * (1 + lam_)).values, (test_["tackles"] >= 2).astype(float).values, test_["Date"].values.astype("datetime64[D]"), test_["league"].values)
         last_ = pp_.groupby(["team_name", "player"]).agg(per90=("per90_prev", "last"), mins=("minutes", lambda s_: s_.tail(6).mean()), n=("minutes", "size"),
                                                          last_date=("Date", "max"))
         last_ = last_[(last_["n"] >= 3) & (last_["last_date"] >= TODAY - pd.Timedelta(days=45))]
@@ -417,5 +435,13 @@ if os.path.exists(PLP_) and len(PA_TACTICS) if "PA_TACTICS" in globals() else Fa
     else:
         print(f"Player tackles: {len(pp_)} player-matches so far; the model needs about 3,000 (the download continues each run).")
 
+grp_rows_ = [{"Market": k.split("|")[0], "Group": CAL_GROUP_NAMES.get(k.split("|")[1], k.split("|")[1]), "Label": "Trusted" if v.get("trusted") else "Experimental",
+              "Worst band gap": v.get("worst_gap")} for k, v in MARKET_TRUST.items() if "|" in k]
+grp_rows_ += [{"Market": k.split("|")[0], "Group": CAL_GROUP_NAMES.get(k.split("|")[1], k.split("|")[1]), "Label": "Trusted" if v else "Experimental", "Worst band gap": None}
+              for k, v in GROUP_TRUST.items()]
+if grp_rows_:
+    market_tables.append({"title": "Calibration by league group", "hint": "Each market's correction and trust label, learned separately for each group of leagues (300+ cases).",
+                          "rows": sorted(grp_rows_, key=lambda r: (r["Market"], r["Group"]))})
+    print(f"Calibration by league group: {sum(r['Label'] == 'Trusted' for r in grp_rows_)} of {len(grp_rows_)} market-group pairs trusted.")
 print(f"More markets: priced for {len(MARKETS)} matches; trusted tests: " + ", ".join(k for k, v in MARKET_TRUST.items() if v.get("trusted")) + ".")
 EXTRA_TABLES_EARLY = list(globals().get("EXTRA_TABLES_EARLY", [])) + market_tables

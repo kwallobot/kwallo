@@ -72,6 +72,10 @@ async function handleUpdate(env, u) {
   const [cmdRaw, ...rest] = text.split(" "), cmd = cmdRaw.split("@")[0].toLowerCase(), arg = rest.join(" ").trim();
   if (cmd.startsWith("/")) { try { await bump(env, "cmd", cmd); } catch (e) {} }
   if (cmd === "/stats") return adminStats(env, chat);
+  if (cmd === "/dashboard") {                                    // v31: admin only
+    if (!env.ADMIN_CHAT_ID || String(chat) !== String(env.ADMIN_CHAT_ID)) return reply(env, chat, HELP);
+    return reply(env, chat, `📈 Your dashboard (latest run): ${env.ORIGIN || ""}/admin/dashboard\nUse any username and your DASHBOARD_PASSWORD.`);
+  }
   if (cmd === "/start") {
     const m = arg.match(/^(team|league)_(.+)$/);
     if (m) {
@@ -141,7 +145,7 @@ async function ensureTables(env) {                       // created on first use
   ]);
   _ready = true;
 }
-const LIVE_PREFS = [["goals", "⚽ Goals (with assists)", 1], ["cards", "🟨 Yellow and red cards", 1], ["htft", "⏸ Half-time and full-time", 1],
+const LIVE_PREFS = [["kickoff", "🟢 Kick-off", 1], ["goals", "⚽ Goals (with assists)", 1], ["cards", "🟨 Yellow and red cards", 1], ["htft", "⏸ Half-time and full-time", 1],
                     ["pressure", "🔥 Pressure alerts", 1], ["sot", "🎯 Every shot on target", 0], ["subs", "🔄 Substitutions", 0]];
 const MAX_PER_MATCH = 15;                                 // per person per match; goals and full-time always get through
 async function livePrefs(env, chat) {
@@ -203,6 +207,7 @@ function findAssist(summary, goal) {                       // v31: ESPN often na
   }
   return null;
 }
+const CORS = { "access-control-allow-origin": "*" };
 const pct = p => (p == null ? "-" : `${Math.round(100 * p)}%`);
 function statLine(s) {
   const f = (a, b) => (a == null || b == null ? null : `${a}–${b}`);
@@ -229,6 +234,10 @@ function liveMessages(m, prev, s) {                       // what changed since 
       const now_ = s.stats[k].sot, was = prev.stats && prev.stats[k] ? prev.stats[k].sot : null;
       if (now_ != null && was != null && now_ > was) out.push({ kind: "sot", text: `🎯 Shot on target: ${esc(team(k))} (${now_} now) · ${esc(s.H)} ${s.hs}–${s.as} ${esc(s.A)}` });
     }
+  }
+  if (s.state === "in" && ((prev && prev.state === "pre") || (!prev && s.minute <= 5)) && !(prev && prev.ko_sent)) {
+    out.push({ kind: "kickoff", always: false, text: `🟢 <b>Kick-off:</b> ${esc(s.H)} v ${esc(s.A)}${m.competition ? ` · ${esc(m.competition)}` : ""}`
+               + (m.pH != null ? `\nChances: ${esc(s.H)} ${pct(m.pH)} · draw ${pct(m.pD)} · ${esc(s.A)} ${pct(m.pA)}` : "") });
   }
   if (prev) {
     const ht = /HALFTIME/i.test(s.name) || /^HT$/i.test(s.detail);
@@ -283,7 +292,7 @@ async function liveTick(env, now = Date.now()) {
       const ev = (((boards[m.espn.code] || {}).events) || []).find(e => String(e.id) === String(m.espn.id));
       if (!ev) continue;
       const s = snapshot(ev);
-      if (s.state === "pre") continue;
+      // (v32: "pre" is recorded too, in the 5 minutes before kickoff, so the start of play can be detected)
       if (s.stats.h.shots == null && summaries < 5) {            // no statistics on the scoreboard: use the match summary
         summaries++;
         try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${m.espn.code}/summary?event=${m.espn.id}`, { headers: { "user-agent": "Mozilla/5.0" } });
@@ -298,11 +307,11 @@ async function liveTick(env, now = Date.now()) {
               if (r.ok) { const sm = await r.json(); for (const g of newGoals) { const a = findAssist(sm, g); if (a) g.names.push(a); } } } catch (e) {}
       }
       if (prev && prev.state === "post") continue;                // already finished and reported
-      let msgs = prev ? liveMessages(m, prev, s) : [];            // the first sighting only sets the starting point
+      let msgs = prev ? liveMessages(m, prev, s) : liveMessages(m, null, s).filter(x => x.kind === "kickoff");   // first sighting: kick-off only
       const pr = pressureCheck(prev, s);
       if (prev) msgs = msgs.concat(pr.out);
       const state = { state: s.state, stats: s.stats, seen: [...new Set([...((prev && prev.seen) || []), ...s.events.map(e => e.key)])],
-                      hist: pr.hist, pressure: pr.last, ht_sent: !!((prev && prev.ht_sent) || /HALFTIME/i.test(s.name) || /^HT$/i.test(s.detail)) };
+                      hist: pr.hist, pressure: pr.last, ko_sent: !!((prev && prev.ko_sent) || s.state === "in" || s.state === "post"), ht_sent: !!((prev && prev.ht_sent) || /HALFTIME/i.test(s.name) || /^HT$/i.test(s.detail)) };
       await env.DB.prepare("INSERT INTO live_state (event_id, data, updated) VALUES (?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET data = excluded.data, updated = excluded.updated")
         .bind(String(m.espn.id), JSON.stringify(state), new Date(now).toISOString()).run();
       for (const msg of msgs) {
@@ -353,30 +362,54 @@ async function adminStats(env, chat) {
 }
 
 // Every 15 minutes: if a match kicks off in 55-85 minutes and no run was started for that kickoff slot, start a lineup-time run.
+// Lineup-time runs, kept lean to save GitHub minutes (checked every 15 minutes):
+//  - only for kickoffs 50-65 minutes away (lineups are out by the time the run fetches them; no waiting inside the run),
+//  - only for matches someone follows, or in the headline competitions, and only where ESPN has lineups,
+//  - no second run within 20 minutes (one run covers every kickoff in its 15-minute window),
+//  - at most LINEUP_DAILY_MAX runs a day (default 6), with followed teams' matches first (they may use 2 more).
+const HEADLINE = ["Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions League", "Europa League", "Conference League"];
 async function maybeDispatch(env, now = Date.now()) {
   const obj = await env.DATA.get("site/schedule.json");
   if (!obj) return "no schedule";
   const sched = await obj.json();
-  const due = sched.filter(m => m.kickoff && (Date.parse(m.kickoff) - now) / 60000 >= 55 && (Date.parse(m.kickoff) - now) / 60000 <= 85);
+  const mins = m => (Date.parse(m.kickoff) - now) / 60000;
+  let due = sched.filter(m => m.kickoff && m.espn && mins(m) >= 50 && mins(m) < 65);
   if (!due.length) return "nothing due";
+  const comps = (env.LINEUP_COMPS ? String(env.LINEUP_COMPS).split(",").map(s => s.trim()) : HEADLINE);
+  const subs = (await env.DB.prepare("SELECT kind, slug FROM subs").all()).results || [];
+  const followed = new Set(subs.map(s => `${s.kind}:${s.slug}`));
+  const isFollowed = m => followed.has(`team:${m.home_slug}`) || followed.has(`team:${m.away_slug}`) || followed.has(`league:${m.league_slug}`);
+  due = due.filter(m => comps.includes(m.competition) || isFollowed(m));
+  if (!due.length) return "nothing due that anyone follows";
+  const dueFollowed = due.some(isFollowed);
+  const recent = await env.DB.prepare("SELECT slot FROM dispatched WHERE at >= ?").bind(new Date(now - 20 * 60000).toISOString()).first();
+  if (recent) return "a run started in the last 20 minutes already covers these";
+  const today = new Date(now).toISOString().slice(0, 10);
+  const nToday = ((await env.DB.prepare("SELECT COUNT(*) AS n FROM dispatched WHERE at >= ?").bind(today).first()) || {}).n || 0;
+  const cap = parseInt(env.LINEUP_DAILY_MAX || "6");
+  // followed teams first: their slots always run (up to cap + 2); other slots only if a run is still left after
+  // reserving one for each later slot today that has a followed match
+  const later = new Set(sched.filter(m => m.kickoff && m.espn && m.kickoff.slice(0, 10) === today && mins(m) >= 65 && isFollowed(m))
+                             .map(m => m.kickoff.slice(0, 15)));
+  if (dueFollowed && nToday >= cap + 2) return `daily ceiling reached (${nToday} runs today)`;
+  if (!dueFollowed && nToday + later.size >= cap) return `skipped: keeping ${later.size} run(s) for followed matches later today (${nToday} used, cap ${cap})`;
   const slot = due.map(m => m.kickoff.slice(0, 16)).sort()[0];
-  const seen = await env.DB.prepare("SELECT slot FROM dispatched WHERE slot = ?").bind(slot).first();
-  if (seen) return "already started for " + slot;
   const r = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/lineups.yml/dispatches`, {
     method: "POST", headers: { authorization: `Bearer ${env.GITHUB_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "kwallo-bot" },
     body: JSON.stringify({ ref: "main" }) });
   if (r.ok || r.status === 204) {
     await env.DB.prepare("INSERT OR IGNORE INTO dispatched (slot, at) VALUES (?, ?)").bind(slot, new Date(now).toISOString()).run();
-    return "started run for " + slot;
+    return `started run for ${slot} (${due.length} matches)`;
   }
   return "GitHub said " + r.status;
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/telegram") {
       if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return new Response("forbidden", { status: 403 });
+      env.ORIGIN = url.origin;
       try { await handleUpdate(env, await request.json()); } catch (e) { console.log("update failed", e); }
       return new Response("ok");                               // always 200, so Telegram doesn't retry endlessly
     }
@@ -389,6 +422,34 @@ export default {
       const b = await request.json();
       await bump(env, String(b.metric || "other"), "", parseInt(b.n) || 0);
       return new Response("ok");
+    }
+    // v32: the website's data (public files written by the pipeline), cached at the edge for 2 minutes
+    if (url.pathname.startsWith("/api/site/")) {
+      const rel = url.pathname.slice("/api/site/".length);
+      if (!/^[a-z0-9][a-z0-9\-\/_.]*\.json$/.test(rel) || rel.includes("..")) return new Response("not found", { status: 404, headers: CORS });
+      const cache = caches.default, ck = new Request(url.toString(), { method: "GET" });
+      const hit = await cache.match(ck);
+      if (hit) return hit;
+      const obj = await env.DATA.get(`site/${rel}`);
+      if (!obj) return new Response("not found", { status: 404, headers: CORS });
+      const res = new Response(obj.body, { headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=120" } });
+      ctx.waitUntil(cache.put(ck, res.clone()));
+      return res;
+    }
+    if (url.pathname === "/api/hit" && request.method === "POST") {   // v32: anonymous feature counters (no personal data)
+      try { const b = await request.json(); const f = String(b.f || "").slice(0, 40).replace(/[^a-z0-9_-]/gi, ""); if (f) ctx.waitUntil(bump(env, "web", f)); } catch (e) {}
+      return new Response("ok", { headers: CORS });
+    }
+    if (request.method === "OPTIONS") return new Response(null, { headers: { ...CORS, "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type" } });
+    if (url.pathname === "/admin/dashboard") {                         // v31: your private dashboard, behind a password
+      if (!env.DASHBOARD_PASSWORD) return new Response("Set a DASHBOARD_PASSWORD secret on the Worker first.", { status: 503 });
+      const auth = request.headers.get("Authorization") || "";
+      let ok = false;
+      try { ok = auth.startsWith("Basic ") && atob(auth.slice(6)).split(":").slice(1).join(":") === env.DASHBOARD_PASSWORD; } catch (e) {}
+      if (!ok) return new Response("Password required", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Kwallo dashboard"' } });
+      const obj = await env.DATA.get("data/dashboard.html");
+      if (!obj) return new Response("No dashboard yet: it appears after the next run.", { status: 404 });
+      return new Response(obj.body, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" } });
     }
     if (url.pathname === "/") return new Response("Kwallo bot is running.");
     return new Response("not found", { status: 404 });

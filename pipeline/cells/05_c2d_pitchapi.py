@@ -1,5 +1,5 @@
 # ===================== 1d. PITCHAPI: other countries' leagues, and expected goals beyond the big five =====================
-import re
+import re, json
 # Free, very new source (unnamed upstream; terms requested). Used as an extra source with fallbacks: if it fails or
 # disappears, everything else keeps working. Needs your key in Colab Secrets as PITCHAPI_KEY.
 PA_OTHER_LEAGUES = {"CZE": "1. Liga", "CRO": "HNL", "SRB": "Super Liga", "ISR": "Ligat ha'Al", "SVK": "1. liga"}
@@ -310,6 +310,11 @@ if PA_KEY:
 
         # ---- (e) v30: every player's match statistics (tackles, minutes, rating...), newest first ----
         PLP = f"{SAVE_DIR}/pitchapi_players.csv"
+        if os.path.exists(PLP):
+            _pl_old = checked_read(PLP, text=("match_id",), num=("tackles", "minutes"), name="pitchapi_players")
+            if len(_pl_old) and _pl_old["tackles"].notna().sum() == 0 and _pl_old["minutes"].notna().sum() == 0:
+                os.remove(PLP)                                   # v32: saved before the parsing fix (no numbers): start again
+                print("PitchAPI player statistics: earlier download had no usable numbers (a parsing bug, now fixed); downloading again.")
         pl_done = set(checked_read(PLP, text=("match_id",), name="pitchapi_players")["match_id"].astype(str)) if os.path.exists(PLP) else set()
         todo_p = pcache[pcache["league"].isin(tac_leagues) & (pcache["status"] == "finished") & ~pcache["id"].astype(str).isin(pl_done)].sort_values("date", ascending=False)
         t3, pl_rows, n_pm = time.time(), [], 0
@@ -317,6 +322,8 @@ if PA_KEY:
             """Collect every numeric statistic in a player's block, whatever its nesting: {"key": ..., "value": ...}."""
             if isinstance(obj, dict):
                 k_, v_ = obj.get("key"), obj.get("value", obj.get("stat", obj.get("total")))
+                if isinstance(v_, dict) and "value" in v_:            # v32: PitchAPI nests it: {"key": ..., "stat": {"type": ..., "value": N}}
+                    v_ = v_["value"]
                 if k_ is not None and v_ is not None and not isinstance(v_, (dict, list)):
                     vv = pd.to_numeric((re.match(r"\s*(-?[0-9.]+)", str(v_)) or [None, None])[1], errors="coerce")
                     if pd.notna(vv):
@@ -327,6 +334,15 @@ if PA_KEY:
             elif isinstance(obj, list):
                 for x_ in obj:
                     _flat(x_, out)
+        PLL = f"{SAVE_DIR}/pitchapi_player_stat_labels.json"          # v32: readable names and sections, for the player pages
+        stat_labels = json.load(open(PLL)) if os.path.exists(PLL) else {}
+        def _labels(groups):
+            for g_ in (groups if isinstance(groups, list) else []):
+                sec_ = g_.get("title") or g_.get("key") or "Other"
+                for lab_, it_ in ((g_.get("stats") or {}).items() if isinstance(g_.get("stats"), dict) else []):
+                    if isinstance(it_, dict) and it_.get("key"):
+                        stat_labels.setdefault(str(it_["key"]).lower(), {"label": lab_, "section": sec_, "order": len(stat_labels),
+                                                                         "type": (it_.get("stat") or {}).get("type")})
         for r_ in todo_p.itertuples():
             if time.time() - t3 > PITCHAPI_PLAYERS_MINUTES * 60:
                 break
@@ -334,17 +350,25 @@ if PA_KEY:
             for p_ in (pls_ if isinstance(pls_, list) else []):
                 st_ = {}
                 _flat(p_.get("stats") or [], st_)
-                tk_ = next((v for k, v in st_.items() if k in ("tackles", "total_tackle", "tackles_won", "tackle") or k.endswith("tackles")), np.nan)
+                _labels(p_.get("stats") or [])
+                tk_ = next((st_[k] for k in ("tackles", "total_tackle", "tackles_won", "won_tackle", "tackle") if k in st_),
+                           next((v for k, v in st_.items() if "tackle" in k and not any(w in k for w in ("pct", "percent", "accuracy", "success"))), np.nan))
                 mn_ = next((v for k, v in st_.items() if "minute" in k), np.nan)
                 pl_rows.append({"match_id": str(r_.id), "team_id": p_.get("team_id"), "player_id": (p_.get("player") or {}).get("id"),
                                 "player": (p_.get("player") or {}).get("name"), "tackles": tk_, "minutes": mn_,
                                 "rating": next((v for k, v in st_.items() if "rating" in k), np.nan),
-                                "interceptions": next((v for k, v in st_.items() if "interception" in k), np.nan)})
+                                "interceptions": next((v for k, v in st_.items() if "interception" in k), np.nan),
+                                "stats_json": json.dumps(st_, separators=(",", ":"))})     # v32: every statistic, for later markets
             if not pls_:
                 pl_rows.append({"match_id": str(r_.id)})
             n_pm += 1
             time.sleep(0.1)
         if pl_rows:
-            pd.DataFrame(pl_rows).to_csv(PLP, mode="a", header=not os.path.exists(PLP), index=False)
+            new_pl = pd.DataFrame(pl_rows)
+            if os.path.exists(PLP) and list(pd.read_csv(PLP, nrows=0).columns) != list(new_pl.columns):    # v32: a column was added: rewrite once
+                pd.concat([pd.read_csv(PLP, dtype=str), new_pl.astype(str)], ignore_index=True).to_csv(PLP, index=False)
+            else:
+                new_pl.to_csv(PLP, mode="a", header=not os.path.exists(PLP), index=False)
+            json.dump(stat_labels, open(PLL, "w"))
         print(f"PitchAPI player statistics: {len(pl_done) + n_pm} matches stored ({n_pm} added this run, {max(0, len(todo_p) - n_pm)} to go).")
 health("PitchAPI", PA_KEY is not None and "unavailable" not in pa_status, pa_status)

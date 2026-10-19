@@ -10,7 +10,8 @@ const D1 = { prepare(sql) { let args = []; const st = { bind(...a) { args = a; r
 const files = { "site/teams.json": [{ slug: "arsenal", name: "Arsenal", league: "Premier League", league_slug: "premier-league" },
                                     { slug: "man-city", name: "Man City", league: "Premier League", league_slug: "premier-league" },
                                     { slug: "man-united", name: "Man United", league: "Premier League", league_slug: "premier-league" }],
-                "site/schedule.json": [{ slug: "x", kickoff: new Date(Date.now() + 70 * 60000).toISOString(), home: "Arsenal", away: "Chelsea" }] };
+                "site/schedule.json": [{ slug: "x", kickoff: new Date(Date.now() + 57 * 60000).toISOString(), home: "Arsenal", away: "Chelsea",
+                                        competition: "Premier League", espn: { code: "eng.1", id: "1" }, home_slug: "arsenal", away_slug: "chelsea", league_slug: "premier-league" }] };
 const R2 = { async get(k) { return files[k] ? { json: async () => files[k] } : null; } };
 const sent = [];
 globalThis.fetch = async (url, opts) => { sent.push({ url: String(url), body: opts && opts.body ? JSON.parse(opts.body) : null });

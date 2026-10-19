@@ -390,10 +390,17 @@ if PLAYER_MODEL or EURO_SOURCE == "espn":
                 for k_ in known - used:
                     ck = _cn(k_)
                     sc_ = 1.0 if cu == ck else (0.92 if min(len(cu), len(ck)) >= 4 and (cu in ck or ck in cu) else difflib.SequenceMatcher(None, cu, ck).ratio())
+                    # v32: initials, e.g. "OH Leuven" -> "Oud-Heverlee Leuven" (same last word, initials of the rest)
+                    uw_, kw_ = str(u_).replace("-", " ").split(), str(k_).replace("-", " ").split()
+                    if (len(uw_) >= 2 and len(kw_) >= 2 and uw_[-1].lower() == kw_[-1].lower() and uw_[0].isupper() and len(uw_[0]) <= 4
+                            and uw_[0].lower() == "".join(w[0] for w in kw_[:-1]).lower()):
+                        sc_ = max(sc_, 0.95)
                     scored.append((sc_, k_))
                 scored.sort(reverse=True)
                 if scored and scored[0][0] >= 0.85 and (len(scored) < 2 or scored[0][0] - scored[1][0] >= 0.05) and u_ not in lower2:
                     name_fixes[(lg_, u_)] = scored[0][1]; used.add(scored[0][1])
+        for (lg_, u_), k_ in (TEAM_NAME_FIXES if "TEAM_NAME_FIXES" in globals() else {}).items():   # v32: your own fixes always win
+            name_fixes[(lg_, u_)] = k_
         if name_fixes:
             espn_fx["HomeTeam"] = [name_fixes.get((l, t), t) for l, t in zip(espn_fx["League"], espn_fx["HomeTeam"])]
             espn_fx["AwayTeam"] = [name_fixes.get((l, t), t) for l, t in zip(espn_fx["League"], espn_fx["AwayTeam"])]

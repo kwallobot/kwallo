@@ -119,3 +119,26 @@ The runs post to **@kwallo_official** by default (the bot must be an administrat
 1. **Cloudflare → your Worker → Settings → Trigger Events:** change the cron from `*/15 * * * *` to **`* * * * *`** (every minute). The Worker now checks followed matches every minute, and still starts lineup-time runs every 15 minutes.
 2. **/stats:** send `/stats` to the bot once. It replies with your chat ID; add it as a Worker **secret** named `ADMIN_CHAT_ID`, then `/stats` shows your figures (only to you).
 3. **The premium switch:** nothing to do until premium launches. On launch day, add a GitHub **variable** `PREMIUM_ENABLED` = `1` (Settings → Secrets and variables → Actions → Variables). Free alerts then carry basic chances only, and the morning digest shows one non-top pick per match.
+
+
+## v32: the Kwallo website, your private dashboard and /dashboard
+
+### 1. Publish the website (Cloudflare Pages, about 10 minutes, once)
+1. Upload the new **`web`** folder (and the updated `pipeline`, `worker` and `tests` folders and this guide) to your GitHub project.
+2. Cloudflare → **Workers & Pages → Create → Pages → Connect to Git** → choose your **kwallo** project.
+3. Build settings: **Framework preset: None**, **Build command: (leave empty)**, **Build output directory: `web`** → **Save and Deploy**.
+4. Project name: **`kwallo`** if available (the address becomes `kwallo.pages.dev`).
+From then on, every upload to GitHub updates the site within a minute, and the data refreshes itself after every pipeline run.
+
+### 2. Tell the pipeline and channel the site's address
+GitHub → Settings → Secrets and variables → Actions → **Variables** → `SITE_URL` = `https://kwallo.pages.dev` (your Pages address). Alerts and the channel's track-record posts then link to the site.
+
+### 3. Analytics (cookie-free)
+Cloudflare → your Pages project → **Metrics → Web Analytics → Enable**.
+
+### 4. Your private dashboard and /dashboard
+Worker → **Edit code** → paste the new `worker/worker.js` → **Deploy**. Then Worker → Settings → Variables and Secrets → add a **Secret** `DASHBOARD_PASSWORD`.
+Open `https://YOUR-WORKER-ADDRESS/admin/dashboard` (any username, your password), or send **/dashboard** to the bot.
+
+### If the site's data address changes
+Edit `web/config.js` (the `api` line points to your Worker's address), upload it to GitHub, and Pages republishes.

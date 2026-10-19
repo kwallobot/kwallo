@@ -6,7 +6,9 @@ SEASONS = ["2324", "2425", "2526", "2627"]       # next summer: add "2728"
 MLS_SEASONS = ["2022", "2023", "2024", "2025", "2026"]
 PREDICT_DAYS = 7
 INCLUDE_SAUDI = True
-INCLUDE_NEW_LEAGUES = True                        # v29: Liga MX, Argentina, Brazil A and B, Bolivia, South Africa, NPFL, Egypt                             # Saudi Pro League (from ESPN: results, fixtures, lineups, odds)                                 # predict fixtures in the next N days
+INCLUDE_NEW_LEAGUES = True
+# Fixture names that don't match the results data: {("League", "name in fixtures"): "name in results"}
+TEAM_NAME_FIXES = {}                        # v29: Liga MX, Argentina, Brazil A and B, Bolivia, South Africa, NPFL, Egypt                             # Saudi Pro League (from ESPN: results, fixtures, lineups, odds)                                 # predict fixtures in the next N days
 
 # Where European results and fixtures come from: "espn" (automatic) or "fbref" (your exported files in Drive)
 EURO_SOURCE = "espn"
