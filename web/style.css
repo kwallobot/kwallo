@@ -160,3 +160,11 @@ table.grid th { text-align: center; }
 .mtabs a { flex: none; padding: .75rem 0 .6rem; text-decoration: none; color: var(--muted); font-weight: 650; font-stretch: 85%; border-bottom: 3px solid transparent; }
 .mtabs a.on { color: var(--ink); border-bottom-color: var(--brand); }
 tr.hl td { background: color-mix(in srgb, var(--brand) 14%, transparent); font-weight: 650; }
+
+/* v34: lineups on a pitch */
+.pitchfig { margin: .5rem 0 1rem; display: flex; flex-direction: column; align-items: center; gap: .35rem; }
+.pitchfig svg { width: 100%; max-width: 380px; height: auto; }
+.pitchfig .turf { fill: color-mix(in srgb, var(--home) 22%, var(--surface)); stroke: var(--line); }
+.pitchfig .lines line, .pitchfig .lines circle, .pitchfig .lines rect { stroke: color-mix(in srgb, var(--ink) 35%, transparent); stroke-width: 1.5; }
+.pitchfig .pn { font: 600 10px var(--font); font-stretch: 80%; fill: var(--ink); }
+.pitchfig .pp { font: 700 9px var(--font); fill: #fff; }

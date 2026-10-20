@@ -1,0 +1,21 @@
+const { JSDOM } = require("jsdom"); const fs = require("fs"), path = require("path");
+const SITE = "/tmp/site33", WEB = path.join(__dirname, "..", "web"), slug = fs.readFileSync(SITE + "/first.txt", "utf8");
+const html = fs.readFileSync(path.join(WEB, "index.html"), "utf8").replace(/<script src="(config|app)\.js"><\/script>/g, "").replace(/<link[^>]+>/g, "");
+const dom = new JSDOM(html, { url: "https://kwallo.pages.dev/#/match/" + slug, runScripts: "dangerously" }); const w = dom.window;
+w.fetch = async url => { url = String(url); if (url.endsWith("/api/live")) return { ok: true, json: async () => ({}) };
+  const f = path.join(SITE, url.split("/api/site/")[1] || ""); return fs.existsSync(f) ? { ok: true, json: async () => JSON.parse(fs.readFileSync(f, "utf8")) } : { ok: false, status: 404 }; };
+w.navigator.sendBeacon = () => true; w.scrollTo = () => {};
+w.eval(fs.readFileSync(path.join(WEB, "config.js"), "utf8")); w.eval(fs.readFileSync(path.join(WEB, "app.js"), "utf8"));
+setTimeout(() => {
+  const $$ = s => [...w.document.querySelectorAll(s)], t = el => el.textContent.replace(/\s+/g, " ").trim();
+  console.log("sections:", $$("#app h2").map(t).join(" | "));
+  console.log("score grid:", t(w.document.querySelector("table.grid").closest(".wrap").previousElementSibling).slice(0, 110), "| cells:", $$("table.grid td").length);
+  console.log("goal-market groups:", $$("#app h3").map(t).filter(x => !/Goalkeeper|Defenders/.test(x)).slice(0, 12).join(", "));
+  const ou = $$("#app tr").map(t).filter(x => /^Over 2.5|^Under 2.5/.test(x));
+  console.log("over/under 2.5:", ou.slice(0, 2));
+  console.log("more markets (with under side):", $$("#app tr").map(t).filter(x => /throw-ins|offsides/i.test(x)).slice(0, 3));
+  console.log("lineup groups:", $$(".pos > .small").map(t).join(", "), "| first:", t(w.document.querySelector(".pos")));
+  console.log("last 7 heading:", $$("#app h3").map(t).find(x => /points per game|[WDL]{3}/.test(x)), "| rows:", $$("#app table").filter(tb => /Opponent/.test(tb.textContent)).map(tb => tb.querySelectorAll("tbody tr").length));
+  console.log("acca badge hidden:", w.getComputedStyle(w.document.querySelector(".bottom .acca-count")).display);
+  process.exit(0);
+}, 400);

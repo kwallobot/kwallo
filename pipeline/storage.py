@@ -25,11 +25,14 @@ def sync_down(local, prefix="data/"):
     if c is None:
         print("Storage: no R2 settings, using the local folder only.")
         return seen
-    n = 0
+    n, stale = 0, []
     for page in c.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
         for o in page.get("Contents", []):
             rel = o["Key"][len(prefix):]
             if not rel:
+                continue
+            if rel.startswith("site/") and rel.count("/") >= 2:
+                stale.append({"Key": o["Key"]})                   # v33: website copies inside data/ (left by an interrupted run): not needed
                 continue
             path = os.path.join(local, rel)
             etag = o["ETag"].strip('"')
@@ -39,6 +42,14 @@ def sync_down(local, prefix="data/"):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             c.download_file(bucket, o["Key"], path)
             n += 1
+    for i in range(0, len(stale), 1000):                            # tidy them away, 1,000 at a time
+        try:
+            c.delete_objects(Bucket=bucket, Delete={"Objects": stale[i:i + 1000], "Quiet": True})
+        except Exception as ex:
+            print(f"Storage: could not tidy old website copies ({str(ex)[:60]}); they're skipped anyway.")
+            break
+    if stale:
+        print(f"Storage: {len(stale)} leftover website copies in data/ removed (the live site files in site/ are untouched).")
     print(f"Storage: {len(seen)} files in R2, {n} downloaded.")
     return seen
 

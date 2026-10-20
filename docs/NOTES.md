@@ -1,16 +1,17 @@
 # Kwallo: roadmap and decisions
 
-*Last updated: 20 October 2026 (v33).*
+*Last updated: 20 October 2026 (v34).*
 
 ## Roadmap
 
 | Version | Contents |
 |---|---|
-| **v32** | The Kwallo website on Cloudflare Pages, private dashboard (`/dashboard`), kick-off alerts, full player statistics, per-group calibration, and the UI fixes |
-| **v33** (current) | Live filter with live scores, collapsible competition cards in a compact two-line layout, collapsible Leagues, the new match header (team stars, time in the centre), "Follow this match" with match-only alerts |
-| **v34** | **Free profiles** (Telegram and Google sign-in), the **full live view** (in-play chances, momentum, win-probability graphs), the **installable app** (PWA) |
-| **v35–v37** | **Basketball: NBA and EuroLeague** |
-| **Then** | **Email sign-in** (needs a domain) and the **premium tier** (Telegram Stars in the bot, Paystack/Flutterwave on the site, switched on with `PREMIUM_ENABLED`) |
+| **v32** | The Kwallo website on Cloudflare Pages, private dashboard, kick-off alerts, full player statistics, per-group calibration, UI fixes |
+| **v33** | Live filter and live scores, collapsible competition cards, collapsible Leagues, match header and tabs, every market, "Follow this match" |
+| **v34** (current) | Lineups on a pitch, xG for the European cups and 19 more competitions (smaller European leagues, second divisions, League One and Two), position fixes, the expected-lineup bug fix |
+| **v35** | **Free profiles** (Telegram and Google sign-in), the **full live view** (in-play chances, momentum, win-probability graphs), the **installable app** (PWA) |
+| **v36–v38** | **Basketball: NBA and EuroLeague** |
+| **Then** | **Email sign-in** (needs a domain) and the **premium tier** |
 
 ## Decisions already made
 

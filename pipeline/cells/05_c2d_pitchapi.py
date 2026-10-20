@@ -11,7 +11,17 @@ if INCLUDE_NEW_LEAGUES:                                          # v29
                           "Brasileirão Série A": ("BRA", "Serie A"), "Brasileirão Série B": ("BRA", "Serie B"),
                           "Bolivia División Profesional": ("BOL", "Primera Division"), "South African Premiership": ("RSA", "Premier Soccer League"),
                           "Egyptian Premier League": ("EGY", "Premier League")})
-CALENDAR_COUNTRIES = {"USA", "BRA", "ARG", "BOL"}                 # seasons named by calendar year ("2026")
+CALENDAR_COUNTRIES = {"USA", "BRA", "ARG", "BOL", "NOR", "SWE"}
+# v34: more competitions with PitchAPI xG, downloaded in priority order and linked to our results in section 7a
+#      (PitchAPI key -> (our competition name, priority)); 1 = European cups, 2 = leagues whose clubs play in Europe,
+#      3 = second divisions, 4 = English League One and Two
+PA_XG_MORE = {"INT-2:Champions League": ("Champions League", 1), "INT-2:Europa League": ("Europa League", 1), "INT-2:Conference League": ("Conference League", 1),
+              "AUT:Bundesliga": ("Austrian Bundesliga", 2), "SUI:Super League": ("Swiss Super League", 2), "DEN:Superligaen": ("Danish Superliga", 2),
+              "NOR:Eliteserien": ("Eliteserien", 2), "SWE:Allsvenskan": ("Allsvenskan", 2), "ROU:Liga I": ("Romanian Liga I", 2), "POL:Ekstraklasa": ("Ekstraklasa", 2),
+              "CZE:1. Liga": ("Other-pa-CZE", 2), "CRO:HNL": ("Other-pa-CRO", 2), "SRB:Super Liga": ("Other-pa-SRB", 2), "ISR:Ligat ha'Al": ("Other-pa-ISR", 2),
+              "SVK:1. liga": ("Other-pa-SVK", 2),
+              "ENG:Championship": ("Championship", 3), "ESP:LaLiga2": ("Segunda Division", 3), "GER:2. Bundesliga": ("2. Bundesliga", 3),
+              "ITA:Serie B": ("Serie B", 3), "FRA:Ligue 2": ("Ligue 2", 3), "ENG:League One": ("League One", 4), "ENG:League Two": ("League Two", 4)}                 # seasons named by calendar year ("2026")
 EXTRA_FIXTURES = pd.DataFrame(columns=["League", "Date", "HomeTeam", "AwayTeam"])
 PITCHAPI_RUN_MINUTES = 10      # time limit per run for the expected-goals download (newest matches first; resumes next run)
 PA_TACTIC_LEAGUES = {"Premier League": ("ENG", "Premier League"), "La Liga": ("ESP", "LaLiga"), "Bundesliga": ("GER", "Bundesliga"),
@@ -136,7 +146,7 @@ if PA_KEY:
         new_rows = []
         for cc, nm in PA_OTHER_LEAGUES.items():
             new_rows += league_matches(cc, nm)
-        for our, (cc, nm) in {**PA_XG_LEAGUES, **PA_TACTIC_LEAGUES}.items():
+        for our, (cc, nm) in {**PA_XG_LEAGUES, **PA_TACTIC_LEAGUES, **{f"more:{k}": tuple(k.split(":", 1)) for k in PA_XG_MORE}}.items():
             new_rows += league_matches(cc, nm)
         if new_rows:
             nr = pd.DataFrame(new_rows)
@@ -212,8 +222,9 @@ if PA_KEY:
         if pxg.empty:
             pxg = pd.DataFrame(columns=["id", "xGH", "xGA"])
         have_ = set(pxg["id"].astype(str))
-        todo = pcache[pcache["league"].isin([f"{c}:{n}" for c, n in PA_XG_LEAGUES.values()]) & (pcache["status"] == "finished") & ~pcache["id"].astype(str).isin(have_)]
-        todo = todo.sort_values("date", ascending=False)
+        todo = pcache[pcache["league"].isin([f"{c}:{n}" for c, n in PA_XG_LEAGUES.values()] + list(PA_XG_MORE)) & (pcache["status"] == "finished") & ~pcache["id"].astype(str).isin(have_)]
+        # v34: our predicted leagues first, then the extra competitions by priority; newest matches first within each
+        todo = todo.assign(_prio=todo["league"].map(lambda l_: PA_XG_MORE.get(l_, (None, 0))[1])).sort_values(["_prio", "date"], ascending=[True, False])
         t0, got = time.time(), []
         for r_ in todo.itertuples():
             if time.time() - t0 > PITCHAPI_RUN_MINUTES * 60:
@@ -252,6 +263,7 @@ if PA_KEY:
                 if r_.home in nm_map and r_.away in nm_map:
                     xg_rows.append({"League": our, "Season": r_.label, "Date": r_.date.normalize(), "HomeTeam": nm_map[r_.home], "AwayTeam": nm_map[r_.away],
                                     "xGH": float(r_.xGH), "xGA": float(r_.xGA), "us_home": r_.home, "us_away": r_.away})
+        PJ_MORE = pj[pj["league"].isin(list(PA_XG_MORE))].copy()        # v34: linked to our results in section 7a
         if xg_rows:
             xg = pd.concat([xg, pd.DataFrame(xg_rows)], ignore_index=True) if len(xg) else pd.DataFrame(xg_rows)
         n_by = pd.Series([r_["League"] for r_ in xg_rows]).value_counts().to_dict() if xg_rows else {}

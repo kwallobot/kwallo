@@ -199,7 +199,7 @@ def prop_rates(team_id, before, scale=1.0, faced=np.nan):
     agg_["p_start"] = rec_.groupby("player_id")["starter"].sum().reindex(agg_.index).fillna(0) / n10
     agg_["p_sub"] = rec_.groupby("player_id")["sub_in"].sum().reindex(agg_.index).fillna(0) / n10
     agg_["exp_min"] = agg_["p_start"] * 82 + agg_["p_sub"] * 22
-    grp_ = agg_["Pos"].astype(str).str.upper().str[:1].where(lambda s: s.isin(list("GDMF")), "M")
+    grp_ = agg_["Pos"].map(line_of) if "line_of" in globals() else agg_["Pos"].astype(str).str.upper().str[:1].where(lambda s: s.isin(list("GDMF")), "M")   # v33
     k90 = 5.0
     for c_ in ["shots", "sot", "fouls"]:
         prior_ = grp_.map(PROP_PRIOR[c_])

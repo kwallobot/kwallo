@@ -8,6 +8,20 @@ SHORT_C = {"Champions League": "UCL", "Europa League": "UEL", "Conference League
 
 
 RUN_REPLAYS = globals().get("RUN_REPLAYS", True)
+
+def line_of(p_):
+    """v33: ESPN's detailed position codes (CD-L, LB, DM, AM-R, LW, CF...) to a line: G, D, M or F."""
+    s_ = str(p_ or "").upper().strip()
+    b_ = s_.split("-")[0]
+    if b_ in ("G", "GK", "GOALKEEPER"):
+        return "G"
+    if b_ in ("D", "DF", "DEF", "CB", "CD", "LCB", "RCB", "LB", "RB", "LWB", "RWB", "WB", "SW", "DEFENDER"):
+        return "D"
+    if b_ in ("M", "MF", "MID", "DM", "CDM", "CM", "LCM", "RCM", "LM", "RM", "AM", "CAM", "LAM", "RAM", "MIDFIELDER"):
+        return "M"
+    if b_ in ("F", "FW", "FWD", "S", "ST", "CF", "LF", "RF", "LW", "RW", "SS", "W", "FORWARD", "ATTACKER"):
+        return "F"
+    return s_[:1] if s_[:1] in ("G", "D", "M", "F") else "M"
 GROUP_TRUST = {}                                        # v32: per league group trust labels         # v27: heavy replays (calibration, lineup model) only in full runs
 
 # ---------- v26: trust rule = within 3 points OR two standard errors (whichever is larger), and stable across runs ----------
@@ -189,12 +203,35 @@ RES["Date"] = pd.to_datetime(RES["Date"]).dt.normalize()
 for c_ in ["FTHG", "FTAG", "HS", "AS", "HST", "AST", "HC", "AC", "HY", "AY", "HR", "AR", "HF", "AF"]:
     RES[c_] = pd.to_numeric(RES.get(c_), errors="coerce")
 RES = RES[RES["Date"] < TODAY].drop_duplicates(["Date", "HomeTeam", "AwayTeam"]).sort_values("Date")
-if len(xg):
-    xm = xg[["League", "HomeTeam", "AwayTeam", "Season", "xGH", "xGA"]].drop_duplicates(["League", "Season", "HomeTeam", "AwayTeam"])
+# v34: xG for the European cups, smaller European leagues and second divisions (PitchAPI), linked to our results by fixtures
+more_rows, more_n = [], {}
+for key_, (our_, prio_) in (PA_XG_MORE.items() if "PA_XG_MORE" in globals() and "PJ_MORE" in globals() else []):
+    p_ = PJ_MORE[PJ_MORE["league"] == key_]
+    d_ = RES[RES["Comp"] == our_]
+    if p_.empty or d_.empty:
+        continue
+    nm_ = map_by_fixtures(p_.rename(columns={"date": "Date", "home": "H", "away": "A"})[["Date", "H", "A"]],
+                          d_[["Date", "HomeTeam", "AwayTeam"]].rename(columns={"HomeTeam": "H", "AwayTeam": "A"}))
+    for r_ in p_.itertuples():
+        if r_.home in nm_ and r_.away in nm_:
+            more_rows.append({"League": our_, "Season": r_.label, "Date": pd.Timestamp(r_.date).normalize(), "HomeTeam": nm_[r_.home], "AwayTeam": nm_[r_.away],
+                              "xGH": float(r_.xGH), "xGA": float(r_.xGA)})
+            more_n[our_] = more_n.get(our_, 0) + 1
+if more_n:
+    print("Extra xG linked (cups, smaller leagues, second divisions): " + ", ".join(f"{k} {v}" for k, v in sorted(more_n.items(), key=lambda kv: -kv[1])))
+xg_all = pd.concat([xg, pd.DataFrame(more_rows)], ignore_index=True) if (len(xg) and more_rows) else (pd.DataFrame(more_rows) if more_rows else xg)
+if len(xg_all):
+    xm = xg_all[["League", "HomeTeam", "AwayTeam", "Season", "xGH", "xGA"]].drop_duplicates(["League", "Season", "HomeTeam", "AwayTeam"])
     seas_ = pd.concat([all_matches[["League", "Season", "Date", "HomeTeam", "AwayTeam"]]] + [i_["data"][["League", "Season", "Date", "HomeTeam", "AwayTeam"]] for i_ in SOLO.values()])
     seas_["Date"] = pd.to_datetime(seas_["Date"]).dt.normalize()
     RES = RES.merge(seas_.rename(columns={"League": "Comp"}), on=["Comp", "Date", "HomeTeam", "AwayTeam"], how="left")
     RES = RES.merge(xm.rename(columns={"League": "Comp"}), on=["Comp", "Season", "HomeTeam", "AwayTeam"], how="left")
+    if more_rows:                                                   # v34: the extra competitions match by date and teams (no season labels there)
+        md_ = pd.DataFrame(more_rows)[["League", "Date", "HomeTeam", "AwayTeam", "xGH", "xGA"]].rename(columns={"League": "Comp"})
+        md_ = md_.drop_duplicates(["Comp", "Date", "HomeTeam", "AwayTeam"])
+        RES = RES.merge(md_, on=["Comp", "Date", "HomeTeam", "AwayTeam"], how="left", suffixes=("", "_more"))
+        for c_ in ["xGH", "xGA"]:
+            RES[c_] = RES[c_].fillna(RES.pop(c_ + "_more"))
 else:
     RES["xGH"], RES["xGA"] = np.nan, np.nan
 TEAM_RES = {}
@@ -479,7 +516,7 @@ if PLAYER_MODEL and len(lu):
     # A "start share": the 11 who started most of the last 10 matches (missing the last squad halves a player's chance)
     # B "last XI": exactly the last starting eleven (what PitchAPI shows until lineups are confirmed)
     # C "last XI, adjusted" (v22): the last XI with known absences swapped for the likeliest replacement in the same position group
-    grp = lambda p_: (str(p_ or "M").upper()[:1] if str(p_ or "M").upper()[:1] in "GDMF" else "M")
+    grp = line_of
     def xi_methods(g_, allev, k_, extra_out=frozenset()):
         prev10 = allev.iloc[max(0, k_ - 10):k_]["event_id"]
         prev_rows = g_[g_["event_id"].isin(prev10)]
@@ -647,6 +684,10 @@ if PLAYER_MODEL and len(lu):
         best_m = "C"
     EXPECTED_XI = {}
     pname_ = L.drop_duplicates("player_id", keep="last").set_index("player_id")[["player", "pos"]].to_dict("index")
+    _st = L[L["starter"].astype(bool) & L["pos"].notna() & ~L["pos"].astype(str).str.upper().isin(["SUB", "S", ""])].sort_values("date").groupby("player_id").tail(15)
+    for pid_, p_ in _st.groupby("player_id")["pos"].agg(lambda s: s.map(line_of).mode().iloc[0] if len(s) else None).items():
+        if pid_ in pname_ and p_:
+            pname_[pid_]["line"] = p_
     for r_ in pm.itertuples():
         key_ = (r_.Competition, str(r_.Date)[:10], r_.Home, r_.Away)
         entry_ = {}
@@ -688,7 +729,12 @@ if PLAYER_MODEL and len(lu):
                     conf_ = xi_
             if conf_:                                         # v27: the official lineup is out
                 chosen, probs_, rotation_note = sorted(conf_, key=lambda p_: "GDMF".find(grp(pname_.get(p_, {}).get("pos")))), {p_: 1.0 for p_ in conf_}, None
-            entry_[side_] = {"ours": [{"Player": pname_.get(p_, {}).get("player", p_), "Pos": pname_.get(p_, {}).get("pos"), "p": probs_.get(p_, 0.0)}
+            if not conf_ and len(chosen) < 11:                  # v33: always a full eleven (fill with the likeliest starters left)
+                rest_ = sorted((p_ for p_ in probs_ if p_ not in chosen), key=lambda p_: -probs_.get(p_, 0))
+                chosen = list(chosen) + rest_[:11 - len(chosen)]
+            chosen = sorted(chosen, key=lambda p_: "GDMF".find(pname_.get(p_, {}).get("line") or line_of(pname_.get(p_, {}).get("pos"))))
+            entry_[side_] = {"ours": [{"Player": pname_.get(p_, {}).get("player", p_), "Pos": pname_.get(p_, {}).get("pos"),
+                                       "Line": pname_.get(p_, {}).get("line") or line_of(pname_.get(p_, {}).get("pos")), "p": probs_.get(p_, 0.0)}
                                       for p_ in chosen], "doubts": [] if conf_ else sorted(missing_names),
                              "method": "confirmed lineup" if conf_ else names_m[best_m], "rotation": rotation_note, "confirmed": bool(conf_)}
         EXPECTED_XI[key_] = entry_

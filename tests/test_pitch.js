@@ -1,0 +1,18 @@
+const { JSDOM } = require("jsdom"); const fs = require("fs"), path = require("path");
+const SITE = "/tmp/site33", WEB = path.join(__dirname, "..", "web"), slug = fs.readFileSync(SITE + "/first.txt", "utf8");
+const html = fs.readFileSync(path.join(WEB, "index.html"), "utf8").replace(/<script src="(config|app)\.js"><\/script>/g, "").replace(/<link[^>]+>/g, "");
+const dom = new JSDOM(html, { url: `https://kwallo.pages.dev/#/match/${slug}/lineups`, runScripts: "dangerously" }); const w = dom.window;
+w.fetch = async url => { url = String(url); if (url.endsWith("/api/live")) return { ok: true, json: async () => ({}) };
+  const f = path.join(SITE, url.split("/api/site/")[1] || ""); return fs.existsSync(f) ? { ok: true, json: async () => JSON.parse(fs.readFileSync(f, "utf8")) } : { ok: false, status: 404 }; };
+w.navigator.sendBeacon = () => true; w.scrollTo = () => {};
+w.eval(fs.readFileSync(path.join(WEB, "config.js"), "utf8")); w.eval(fs.readFileSync(path.join(WEB, "app.js"), "utf8"));
+setTimeout(() => { const d = w.document;
+  console.log("captions:", [...d.querySelectorAll(".pitchfig figcaption")].map(c => c.textContent.trim()).join(" | "));
+  const gs = [...d.querySelectorAll(".pitchfig svg > g[opacity]")];
+  console.log("players drawn:", gs.length);
+  const home = gs.slice(11).map(g => ({ x: +g.querySelector("circle").getAttribute("cx"), y: +g.querySelector("circle").getAttribute("cy"), n: g.querySelector(".pn").textContent }));
+  const rows = {}; home.forEach(p => (rows[p.y] = rows[p.y] || []).push(p));
+  Object.entries(rows).sort((a, b) => b[0] - a[0]).forEach(([y, ps]) => console.log(`  home row y=${y}:`, ps.sort((a, b) => a.x - b.x).map(p => p.n).join("  ")));
+  console.log("faintest player opacity:", Math.min(...gs.map(g => +g.getAttribute("opacity"))), "| list below pitch:", [...d.querySelectorAll(".pos > .small")].length, "groups");
+  process.exit(0);
+}, 400);

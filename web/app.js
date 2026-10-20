@@ -306,7 +306,9 @@
                 <td class="r num">${pct(x.p)}</td><td class="r num">${odds(x.fair)}</td><td class="r">${accaBtn(sel(base, x.p, x.fair))}</td></tr>`
                 + (under ? `<tr><td>${esc(under)}</td><td class="r num">${pct(1 - x.p)}</td><td class="r num">${odds(x.p < 1 ? 1 / (1 - x.p) : null)}</td><td class="r">${accaBtn(sel(under, 1 - x.p, x.p < 1 ? 1 / (1 - x.p) : null))}</td></tr>` : ""); }).join("")}</tbody></table></div>`).join("")}
           <p class="small muted">Trusted markets have passed their calibration test; experimental ones are still being tested. "Under" lines are the other side of each market.</p></section>` : ""}
-      ${xi ? `<section class="section" data-tab="lineups"><h2>${confirmed ? "Lineups" : "Expected lineups"}</h2><div class="stat-grid" style="grid-template-columns:1fr 1fr">
+      ${xi ? `<section class="section" data-tab="lineups"><h2>${confirmed ? "Lineups" : "Expected lineups"}</h2>
+          <p class="small muted">${confirmed ? "Official lineups." : "Expected lineups: fainter players are less certain to start; the number is each player's start chance."}</p>
+          ${pitchSVG((d.expected_xi || {}).home, (d.expected_xi || {}).away, H, A, (mb_.badges.home || {}).c, (mb_.badges.away || {}).c)}<div class="stat-grid" style="grid-template-columns:1fr 1fr">
           <div style="display:block"><h3>${esc(H)}</h3>${xiByPosition((d.expected_xi || {}).home)}</div><div style="display:block"><h3>${esc(A)}</h3>${xiByPosition((d.expected_xi || {}).away)}</div></div>
           <p class="small muted">${confirmed ? "Official lineups." : "Percentages are each player's chance of starting."}</p></section>` : ""}
       ${(d.trends || {}).home || (d.trends || {}).away ? `<section class="section" data-tab="form"><h2>Last 7 matches</h2>${lastSeven((d.trends || {}).home, H)}${lastSeven((d.trends || {}).away, A)}</section>` : ""}
@@ -470,12 +472,47 @@
       <div class="wrap"><table><thead><tr><th>Date</th><th></th><th>Opponent</th><th class="r">Score</th><th class="r">xG</th></tr></thead><tbody>
       ${rows.map(r => `<tr><td class="num small">${esc(String(r.Date).slice(5))}</td><td class="small muted">${r.Venue === "H" ? "home" : "away"}</td><td>${esc(r.Opponent)} <span class="small muted">${esc(r.Comp || "")}</span></td>
         <td class="r num">${formChips(r.Result)} ${esc(r.Score)}</td><td class="r num small">${esc(r.xG || "–")}</td></tr>`).join("")}</tbody></table></div>
+      ${rows.some(r => !r.xG) ? `<p class="small muted">xG shows "–" where no source covers that match (some cup and European ties, and leagues without xG data).</p>` : ""}
       ${(t.spotted || []).length ? `<ul class="list small">${t.spotted.slice(0, 5).map(s => `<li>${esc(typeof s === "string" ? s : (s.pattern ? `${s.pattern}: ${s.count} of the last ${s.of}${s.base != null ? `, league usually ${pct(s.base)}` : ""}` : JSON.stringify(s)))}</li>`).join("")}</ul>` : ""}`;
   }
   const POS = [["G", "Goalkeeper"], ["D", "Defenders"], ["M", "Midfielders"], ["F", "Forwards"]];
+  // v34: the lineup on a pitch. Home in the bottom half, away in the top half; each line ordered left to right by position code
+  const sideRank = pos => { const c = String(pos || "").toUpperCase().trim();      // wide left 0, left of centre 1, centre 2, right of centre 3, wide right 4
+    if (/-L$/.test(c)) return 1; if (/-R$/.test(c)) return 3; if (/^L/.test(c)) return 0; if (/^R/.test(c)) return 4; return 2; };
+  function pitchSVG(home, away, H, A, cHome, cAway) {
+    const W = 340, Hh = 520;
+    const lines = e => { const g = { G: [], D: [], M: [], F: [] };
+      ((e && e.ours) || []).forEach(p => { const k = p.Line || "M"; (g[k] || g.M).push(p); });
+      Object.values(g).forEach(arr => arr.sort((x, y) => sideRank(x.Pos) - sideRank(y.Pos))); return g; };
+    const formation = g => [g.D.length, g.M.length, g.F.length].filter(n => n).join("-");
+    const dots = (g, top, color) => {
+      const rows = top ? ["G", "D", "M", "F"] : ["G", "D", "M", "F"];
+      const yOf = { G: top ? 34 : Hh - 34, D: top ? 92 : Hh - 92, M: top ? 160 : Hh - 160, F: top ? 222 : Hh - 222 };
+      return rows.map(k => g[k].map((p, i, arr) => { const x = (W / (arr.length + 1)) * (i + 1), y = yOf[k], op = p.p != null ? Math.max(0.35, Math.min(1, p.p)) : 1;
+        const sur = String(p.Player || "").split(" ").slice(-1)[0];
+        return `<g opacity="${op.toFixed(2)}"><circle cx="${x.toFixed(1)}" cy="${y}" r="13" fill="${color}" stroke="#fff" stroke-width="1.5"/>
+          <text x="${x.toFixed(1)}" y="${y + 27}" text-anchor="middle" class="pn">${esc(sur.slice(0, 12))}</text>
+          ${p.p != null && p.p < 0.995 ? `<text x="${x.toFixed(1)}" y="${y + 4}" text-anchor="middle" class="pp">${Math.round(100 * p.p)}</text>` : ""}</g>`; }).join("")).join("");
+    };
+    const gh = lines(home), ga = lines(away);
+    return `<figure class="pitchfig"><figcaption class="small"><span><b>${esc(A)}</b> ${formation(ga) ? `(${formation(ga)})` : ""}</span></figcaption>
+      <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Lineups on the pitch: ${esc(H)} ${formation(gh)}, ${esc(A)} ${formation(ga)}">
+        <rect x="1" y="1" width="${W - 2}" height="${Hh - 2}" rx="10" class="turf"/>
+        <g class="lines" fill="none"><line x1="1" y1="${Hh / 2}" x2="${W - 1}" y2="${Hh / 2}"/><circle cx="${W / 2}" cy="${Hh / 2}" r="42"/>
+          <rect x="${W / 2 - 80}" y="1" width="160" height="62"/><rect x="${W / 2 - 80}" y="${Hh - 63}" width="160" height="62"/>
+          <rect x="${W / 2 - 34}" y="1" width="68" height="22"/><rect x="${W / 2 - 34}" y="${Hh - 23}" width="68" height="22"/></g>
+        ${dots(ga, true, cAway || "#6F8F84")}${dots(gh, false, cHome || "#2E8F6A")}
+      </svg><figcaption class="small"><span><b>${esc(H)}</b> ${formation(gh) ? `(${formation(gh)})` : ""}</span></figcaption></figure>`;
+  }
   function xiByPosition(e) {
     const list = (e && e.ours) || [], groups = {};
-    list.forEach(p => { const k = String(p.Pos || "").toUpperCase().replace(/^A/, "F")[0] || "?"; (groups[k] = groups[k] || []).push(p); });
+    const lineOf = pos => { const b = String(pos || "").toUpperCase().trim().split("-")[0];
+      if (["G", "GK"].includes(b)) return "G";
+      if (["D", "DF", "CB", "CD", "LCB", "RCB", "LB", "RB", "LWB", "RWB", "WB", "SW"].includes(b)) return "D";
+      if (["M", "MF", "DM", "CDM", "CM", "LCM", "RCM", "LM", "RM", "AM", "CAM", "LAM", "RAM"].includes(b)) return "M";
+      if (["F", "FW", "S", "ST", "CF", "LF", "RF", "LW", "RW", "SS", "W"].includes(b)) return "F";
+      return "GDMF".includes(b[0]) && b[0] ? b[0] : "M"; };
+    list.forEach(p => { const k = p.Line || lineOf(p.Pos); (groups[k] = groups[k] || []).push(p); });
     return POS.filter(([k]) => groups[k]).map(([k, lab]) => `<div class="pos"><span class="small muted">${lab}</span>${groups[k].map(p => `<span class="pl">${esc(p.Player)}${p.p != null && !e.confirmed ? ` <span class="num small muted">${pct(p.p)}</span>` : ""}</span>`).join("")}</div>`).join("")
       + (Object.keys(groups).some(k => !POS.some(([x]) => x === k)) ? `<div class="pos"><span class="small muted">Other</span>${Object.entries(groups).filter(([k]) => !POS.some(([x]) => x === k)).flatMap(([, v]) => v).map(p => `<span class="pl">${esc(p.Player)}</span>`).join("")}</div>` : "");
   }
