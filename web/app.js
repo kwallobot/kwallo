@@ -230,7 +230,13 @@
       <ul class="list">${comps.map(c => `<li><a href="#/comp/${esc(c.slug)}/leaders">${esc(c.name)}</a></li>`).join("")}</ul>`;
   }
 
-  async function pageMatch(slug) {
+  const FAMILY = [["shots", "Shots"], ["sot", "Shots on target"], ["fouls", "Fouls"], ["halftime", "Half-time"], ["halftime_both", "Goals in both halves"],
+    ["timing", "Goal timing"], ["penalty", "Penalties"], ["throwins", "Throw-ins"], ["offsides", "Offsides"], ["tackles", "Tackles"], ["player_props", "Player props"]];
+  const famName = f => (FAMILY.find(([k]) => k === f) || [f, String(f || "Other").replace(/_/g, " ").replace(/^./, c => c.toUpperCase())])[1];
+  const famRank = f => { const i = FAMILY.findIndex(([k]) => k === f); return i < 0 ? 99 : i; };
+  const TABS = [["overview", "Overview"], ["verdict", "Verdict"], ["markets", "Markets"], ["lineups", "Lineups"], ["form", "Form"], ["table", "Table"]];
+  async function pageMatch(slug, tab) {
+    tab = TABS.some(([k]) => k === tab) ? tab : "overview";
     setNav("today");
     const d = await get(`match/${slug}.json`);
     await getLive();
@@ -266,22 +272,60 @@
         ${m.ExpHome != null ? `<p class="muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}.</p>` : ""}
 
       </section>
-      ${v.best && v.best.length ? `<section class="section"><h2>Verdict</h2><ul class="list">${v.best.map(b => `<li class="angle"><span><b>${esc(b.Bet)}</b><br><span class="small muted">Fair odds ${odds(b.fair)}</span></span>
+      <nav class="mtabs" role="tablist">${TABS.map(([k, l]) => `<a role="tab" href="#/match/${esc(slug)}/${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</a>`).join("")}</nav>
+      <section class="section" data-tab="overview">
+        ${m.ExpHome != null ? `<p>Expected goals: <b>${esc(H)} ${Number(m.ExpHome).toFixed(2)}</b>, <b>${esc(A)} ${Number(m.ExpAway).toFixed(2)}</b>.</p>` : ""}
+        ${m.Grid ? (() => { const tot = m.Grid.flat().reduce((s, x) => s + x, 0) || 1, cs = []; m.Grid.forEach((r, i) => r.forEach((x, j) => cs.push([i, j, x / tot])));
+            return `<h3>Likeliest scores</h3><p class="num">${cs.sort((a_, b_) => b_[2] - a_[2]).slice(0, 5).map(([i, j, p]) => `<b>${i}–${j}</b> ${pct(p)}`).join(" · ")}</p>`; })() : ""}
+        ${v.best && v.best.length ? `<h3>Top angle</h3><p><b>${esc(v.best[0].Bet)}</b>, ${pct(v.best[0].p)}, fair ${odds(v.best[0].fair)}. <a href="#/match/${esc(slug)}/verdict">Full verdict</a></p>` : ""}
+        ${m.pBTTS != null || m.pOver25 != null ? `<p>${m.pBTTS != null ? `Both teams to score ${pct(m.pBTTS)}. ` : ""}${m.pOver25 != null ? `Over 2.5 goals ${pct(m.pOver25)}.` : ""} <a href="#/match/${esc(slug)}/markets">All markets</a></p>` : ""}
+        ${m.Absent ? `<h3>Likely missing</h3><p class="small">${esc(m.Absent)}</p>` : ""}
+        ${m.Note ? `<p class="small muted">${esc(m.Note)}</p>` : ""}
+      </section>
+      <section class="section" data-tab="table"><div data-match-table="${esc(m.league_slug || "")}" data-h="${esc(hs)}" data-a="${esc(as)}"><p class="muted small">Loading the table…</p></div></section>
+      ${v.best && v.best.length ? `<section class="section" data-tab="verdict"><h2>Verdict</h2><ul class="list">${v.best.map(b => `<li class="angle"><span><b>${esc(b.Bet)}</b><br><span class="small muted">Fair odds ${odds(b.fair)}</span></span>
           <span class="side"><span class="p num">${pct(b.p)}</span>${accaBtn(sel(b.Bet, b.p, b.fair))}</span><span class="why">${esc((b.reasons || []).join(" ") || b.evidence || "")}</span></li>`).join("")}
         ${v.safer ? `<li class="angle"><span>Safer angle: <b>${esc(v.safer.Bet)}</b><br><span class="small muted">Fair odds ${odds(v.safer.fair)}</span></span>
           <span class="side"><span class="p num">${pct(v.safer.p)}</span>${accaBtn(sel(v.safer.Bet, v.safer.p, v.safer.fair))}</span></li>` : ""}</ul>
         ${(v.avoid || []).length ? `<p class="small"><b>Avoid:</b> ${v.avoid.map(esc).join(" ")}</p>` : ""}</section>` : ""}
-      ${extra.length ? `<section class="section"><h2>Goals, corners and cards</h2><ul class="list">${extra.map(([n, p]) => `<li class="angle"><span>${esc(n)}<br><span class="small muted">Fair odds ${odds(1 / p)}</span></span><span class="p num">${pct(p)}</span></li>`).join("")}</ul></section>` : ""}
-      ${markets.length ? `<section class="section"><h2>More markets</h2>${Object.entries(fam).map(([f, xs]) => `<h3>${esc(f.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()))}</h3><div class="wrap"><table><tbody>
-          ${xs.map(x => `<tr><td>${esc(x.Bet)} <span class="tag ${x.trusted ? "trusted" : ""}">${x.trusted ? "trusted" : "experimental"}</span></td><td class="r num">${pct(x.p)}</td><td class="r num">${odds(x.fair)}</td>
-            <td class="r">${accaBtn(sel(x.Bet, x.p, x.fair))}</td></tr>`).join("")}</tbody></table></div>`).join("")}
-          <p class="small muted">Trusted markets have passed their calibration test; experimental ones are still being tested.</p></section>` : ""}
-      ${xi ? `<section class="section"><h2>${confirmed ? "Lineups" : "Expected lineups"}</h2><div class="stat-grid" style="grid-template-columns:1fr 1fr">
-          <div style="display:block"><h3>${esc(H)}</h3><ul class="list">${xiSide("home")}</ul></div><div style="display:block"><h3>${esc(A)}</h3><ul class="list">${xiSide("away")}</ul></div></div>
+      ${m.Grid ? `<section class="section" data-tab="markets"><h2>Score grid</h2>${gridTable(m.Grid, H, A)}</section>
+        <section class="section" data-tab="markets"><h2>Goals markets</h2>${(() => { const gm = gridMarkets(m.Grid, H, A), g = {}; gm.forEach(([f, b, p]) => (g[f] = g[f] || []).push([b, p]));
+          return `<p class="small muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}, total ${(Number(m.ExpHome) + Number(m.ExpAway)).toFixed(2)}.</p>`
+            + Object.entries(g).map(([f, xs]) => `<h3>${esc(f)}</h3><div class="wrap"><table><tbody>${xs.map(([b, p]) => `<tr><td>${esc(b)}</td><td class="r num">${pct(p)}</td><td class="r num">${odds(p > 0 ? 1 / p : null)}</td>
+              <td class="r">${accaBtn(sel(`${f}: ${b}`, p, p > 0 ? 1 / p : null))}</td></tr>`).join("")}</tbody></table></div>`).join(""); })()}</section>` : ""}
+      ${m.ExpCorners != null || m.ExpCards != null ? `<section class="section" data-tab="markets"><h2>Corners and cards</h2><div class="wrap"><table><tbody>
+          ${m.ExpCorners != null ? `<tr><td>Expected corners</td><td class="r num">${Number(m.ExpCorners).toFixed(1)}</td><td></td></tr>` : ""}
+          ${m.pOverCorners != null ? `<tr><td>Over 9.5 corners</td><td class="r num">${pct(m.pOverCorners)}</td><td class="r num">${odds(1 / m.pOverCorners)}</td></tr><tr><td>Under 9.5 corners</td><td class="r num">${pct(1 - m.pOverCorners)}</td><td class="r num">${odds(1 / (1 - m.pOverCorners))}</td></tr>` : ""}
+          ${m.ExpCards != null ? `<tr><td>Expected cards${m.ExpCardsH != null ? ` (${esc(H)} ${Number(m.ExpCardsH).toFixed(1)}, ${esc(A)} ${Number(m.ExpCardsA).toFixed(1)})` : ""}</td><td class="r num">${Number(m.ExpCards).toFixed(1)}</td><td></td></tr>` : ""}
+          ${m.pOverCards != null ? `<tr><td>Over 4.5 cards</td><td class="r num">${pct(m.pOverCards)}</td><td class="r num">${odds(1 / m.pOverCards)}</td></tr><tr><td>Under 4.5 cards</td><td class="r num">${pct(1 - m.pOverCards)}</td><td class="r num">${odds(1 / (1 - m.pOverCards))}</td></tr>` : ""}
+        </tbody></table></div></section>` : ""}
+      ${markets.length ? `<section class="section" data-tab="markets"><h2>More markets</h2>${Object.entries(fam).sort((x, y) => famRank(x[0]) - famRank(y[0])).map(([f, xs]) => `<h3>${esc(famName(f))}</h3><div class="wrap"><table><tbody>
+          ${xs.map(x => { const ex = (String(x.Bet).match(/\(expected ([\d.]+)\)/) || [])[1], base = String(x.Bet).replace(/\s*\(expected [\d.]+\)/, "");
+              const under = /\bover\b/i.test(base) ? base.replace(/\bover\b/i, m_ => m_[0] === "O" ? "Under" : "under") : null;
+              return `<tr><td>${esc(base)} <span class="tag ${x.trusted ? "trusted" : ""}">${x.trusted ? "trusted" : "experimental"}</span>${ex ? `<br><span class="small muted">Expected: ${esc(ex)}</span>` : ""}</td>
+                <td class="r num">${pct(x.p)}</td><td class="r num">${odds(x.fair)}</td><td class="r">${accaBtn(sel(base, x.p, x.fair))}</td></tr>`
+                + (under ? `<tr><td>${esc(under)}</td><td class="r num">${pct(1 - x.p)}</td><td class="r num">${odds(x.p < 1 ? 1 / (1 - x.p) : null)}</td><td class="r">${accaBtn(sel(under, 1 - x.p, x.p < 1 ? 1 / (1 - x.p) : null))}</td></tr>` : ""); }).join("")}</tbody></table></div>`).join("")}
+          <p class="small muted">Trusted markets have passed their calibration test; experimental ones are still being tested. "Under" lines are the other side of each market.</p></section>` : ""}
+      ${xi ? `<section class="section" data-tab="lineups"><h2>${confirmed ? "Lineups" : "Expected lineups"}</h2><div class="stat-grid" style="grid-template-columns:1fr 1fr">
+          <div style="display:block"><h3>${esc(H)}</h3>${xiByPosition((d.expected_xi || {}).home)}</div><div style="display:block"><h3>${esc(A)}</h3>${xiByPosition((d.expected_xi || {}).away)}</div></div>
           <p class="small muted">${confirmed ? "Official lineups." : "Percentages are each player's chance of starting."}</p></section>` : ""}
-      ${d.last_time && (d.last_time.home || d.last_time.away) ? `<section class="section"><h2>Last time out</h2>${["home", "away"].map(s => { const lt = d.last_time[s]; if (!lt || !(lt.picks || []).length) return "";
+      ${(d.trends || {}).home || (d.trends || {}).away ? `<section class="section" data-tab="form"><h2>Last 7 matches</h2>${lastSeven((d.trends || {}).home, H)}${lastSeven((d.trends || {}).away, A)}</section>` : ""}
+      ${d.last_time && (d.last_time.home || d.last_time.away) ? `<section class="section" data-tab="form"><h2>Last time out</h2>${["home", "away"].map(s => { const lt = d.last_time[s]; if (!lt || !(lt.picks || []).length) return "";
           return `<h3>${esc(s === "home" ? H : A)}${lt.match ? `: ${esc(lt.match)} ${esc(lt.score || "")}` : ""}</h3><ul class="list">${lt.picks.map(p => `<li>${p.won ? '<span class="won">✓</span>' : '<span class="lost">✗</span>'} ${esc(p.Bet)} (${pct(p.p)})</li>`).join("")}</ul>`; }).join("")}</section>` : ""}
       <p class="small muted">Probabilities are the model's, not guarantees. A pick is only worth taking above its fair odds. 18+.</p>`;
+    const panes = [...app.querySelectorAll("[data-tab]")];
+    panes.forEach(s => { if (s.dataset.tab !== tab) s.remove(); });
+    if (!panes.some(s => s.dataset.tab === tab)) app.querySelector(".mtabs").insertAdjacentHTML("afterend",
+      empty({ verdict: "No verdict for this match yet.", lineups: "Expected lineups appear a few days before the match, and the official ones about an hour before kickoff.", form: "No recent matches on record.", markets: "No markets for this match yet." }[tab] || "Nothing here yet."));
+    const tbl = app.querySelector("[data-match-table]");
+    if (tbl) {
+      try {
+        const c = await get(`comp/${tbl.dataset.matchTable}.json`);
+        tbl.innerHTML = (c.table || []).length ? `<h2>${esc(c.name)} table</h2><div class="wrap"><table><thead><tr><th>#</th><th>Team</th><th class="r">P</th><th class="r">GD</th><th class="r">Pts</th><th>Form</th></tr></thead><tbody>
+          ${c.table.map(x => `<tr class="${[tbl.dataset.h, tbl.dataset.a].includes(x.team_slug) ? "hl" : ""}"><td class="num">${x.pos}</td><td><a href="#/team/${esc(x.team_slug)}">${esc(x.team)}</a></td><td class="r num">${x.P}</td>
+            <td class="r num">${x.GD > 0 ? "+" : ""}${x.GD}</td><td class="r num"><b>${x.Pts}</b></td><td>${formChips(x.form)}</td></tr>`).join("")}</tbody></table></div>` : empty("This competition has no league table (cup or knockout stage).");
+      } catch (e) { tbl.innerHTML = empty("This competition has no league table (cup or knockout stage)."); }
+    }
     hit("match");
   }
 
@@ -392,6 +436,50 @@
       <li><a href="#/about">About Kwallo</a></li><li><a href="#/privacy">Privacy</a></li><li><a href="#/terms">Terms</a></li></ul>`;
   }
 
+  // ---------- v33: markets derived from the score grid (rows = home goals, columns = away goals, rescaled to 100%)
+  function gridMarkets(G, H, A) {
+    const tot = G.flat().reduce((s, x) => s + x, 0) || 1, P = G.map(r => r.map(x => x / tot));
+    const sum = f => { let s = 0; P.forEach((r, i) => r.forEach((x, j) => { if (f(i, j)) s += x; })); return s; };
+    const out = [];
+    [0.5, 1.5, 2.5, 3.5, 4.5].forEach(l => { const o = sum((i, j) => i + j > l); out.push(["Total goals", `Over ${l}`, o], ["Total goals", `Under ${l}`, 1 - o]); });
+    const btts = sum((i, j) => i > 0 && j > 0); out.push(["Both teams to score", "Yes", btts], ["Both teams to score", "No", 1 - btts]);
+    [[H, (i, j) => i], [A, (i, j) => j]].forEach(([t, g]) => [0.5, 1.5, 2.5].forEach(l => { const o = sum((i, j) => g(i, j) > l); out.push([`${t} goals`, `Over ${l}`, o], [`${t} goals`, `Under ${l}`, 1 - o]); }));
+    out.push(["Clean sheet", `${H} keep a clean sheet`, sum((i, j) => j === 0)], ["Clean sheet", `${A} keep a clean sheet`, sum((i, j) => i === 0)]);
+    out.push(["Win to nil", `${H} win to nil`, sum((i, j) => i > j && j === 0)], ["Win to nil", `${A} win to nil`, sum((i, j) => j > i && i === 0)]);
+    const hw = sum((i, j) => i > j), aw = sum((i, j) => j > i);
+    out.push(["Draw no bet", H, hw / (hw + aw)], ["Draw no bet", A, aw / (hw + aw)]);
+    out.push(["Handicap", `${H} win by 2+`, sum((i, j) => i - j >= 2)], ["Handicap", `${A} win by 2+`, sum((i, j) => j - i >= 2)]);
+    out.push(["Result and both teams to score", `${H} win and both score`, sum((i, j) => i > j && j > 0)], ["Result and both teams to score", `${A} win and both score`, sum((i, j) => j > i && i > 0)]);
+    const odd = sum((i, j) => (i + j) % 2 === 1); out.push(["Odd or even goals", "Odd", odd], ["Odd or even goals", "Even", 1 - odd]);
+    [0, 1, 2, 3].forEach(n => out.push(["Exact total goals", `${n} goals`, sum((i, j) => i + j === n)])); out.push(["Exact total goals", "4 or more", sum((i, j) => i + j >= 4)]);
+    return out;
+  }
+  function gridTable(G, H, A) {
+    const tot = G.flat().reduce((s, x) => s + x, 0) || 1, n = Math.min(G.length, 6), mx = Math.max(...G.flat());
+    const cells = [];
+    G.forEach((r, i) => r.forEach((x, j) => cells.push([i, j, x / tot])));
+    const top = cells.sort((a, b) => b[2] - a[2]).slice(0, 5).map(([i, j, p]) => `${i}–${j} (${pct(p)})`).join(", ");
+    return `<p class="small muted">Likeliest scores: ${top}. Rows are ${esc(H)}'s goals, columns ${esc(A)}'s.</p>
+      <div class="wrap"><table class="grid"><thead><tr><th>${esc(H)} \\ ${esc(A)}</th>${[...Array(n).keys()].map(j => `<th class="r">${j}</th>`).join("")}</tr></thead><tbody>
+      ${G.slice(0, n).map((r, i) => `<tr><th>${i}</th>${r.slice(0, n).map(x => `<td class="r num" style="--a:${(x / mx).toFixed(2)}">${(100 * x / tot).toFixed(1)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  }
+  function lastSeven(t, name) {                                     // a team's last 7 matches, form and spotted trends
+    if (!t || !(t.rows || []).length) return "";
+    const rows = t.rows.slice(-7).reverse();
+    return `<h3>${esc(name)} ${formChips((t.form || "").slice(-7))}${t.ppg != null ? ` <span class="small muted">${Number(t.ppg).toFixed(2)} points per game</span>` : ""}</h3>
+      <div class="wrap"><table><thead><tr><th>Date</th><th></th><th>Opponent</th><th class="r">Score</th><th class="r">xG</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="num small">${esc(String(r.Date).slice(5))}</td><td class="small muted">${r.Venue === "H" ? "home" : "away"}</td><td>${esc(r.Opponent)} <span class="small muted">${esc(r.Comp || "")}</span></td>
+        <td class="r num">${formChips(r.Result)} ${esc(r.Score)}</td><td class="r num small">${esc(r.xG || "–")}</td></tr>`).join("")}</tbody></table></div>
+      ${(t.spotted || []).length ? `<ul class="list small">${t.spotted.slice(0, 5).map(s => `<li>${esc(typeof s === "string" ? s : (s.pattern ? `${s.pattern}: ${s.count} of the last ${s.of}${s.base != null ? `, league usually ${pct(s.base)}` : ""}` : JSON.stringify(s)))}</li>`).join("")}</ul>` : ""}`;
+  }
+  const POS = [["G", "Goalkeeper"], ["D", "Defenders"], ["M", "Midfielders"], ["F", "Forwards"]];
+  function xiByPosition(e) {
+    const list = (e && e.ours) || [], groups = {};
+    list.forEach(p => { const k = String(p.Pos || "").toUpperCase().replace(/^A/, "F")[0] || "?"; (groups[k] = groups[k] || []).push(p); });
+    return POS.filter(([k]) => groups[k]).map(([k, lab]) => `<div class="pos"><span class="small muted">${lab}</span>${groups[k].map(p => `<span class="pl">${esc(p.Player)}${p.p != null && !e.confirmed ? ` <span class="num small muted">${pct(p.p)}</span>` : ""}</span>`).join("")}</div>`).join("")
+      + (Object.keys(groups).some(k => !POS.some(([x]) => x === k)) ? `<div class="pos"><span class="small muted">Other</span>${Object.entries(groups).filter(([k]) => !POS.some(([x]) => x === k)).flatMap(([, v]) => v).map(p => `<span class="pl">${esc(p.Player)}</span>`).join("")}</div>` : "");
+  }
+
   const TEXT = {
     about: `<h1>About Kwallo</h1><div class="prose"><p>Kwallo means "ball" in Hausa. We build football predictions that say exactly how likely each outcome is, and then check ourselves in public.</p>
       <p>Every match gets probabilities from a statistical model of team strength, expected goals, lineups and form, tested week by week against real results. Fair odds are the break-even price: a pick is only worth taking when you're offered more.</p>
@@ -422,7 +510,7 @@
         case "leagues": await pageLeagues(); break;
         case "comp": await pageComp(parts[1], parts[2], parts[3]); break;
         case "leaders": await pageLeadersPicker(); break;
-        case "match": await pageMatch(parts[1]); break;
+        case "match": await pageMatch(parts[1], parts[2]); break;
         case "team": await pageTeam(parts[1]); break;
         case "player": await pagePlayer(parts[1]); break;
         case "angles": await pageAngles(); break;
