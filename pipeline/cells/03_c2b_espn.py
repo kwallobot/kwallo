@@ -432,6 +432,7 @@ if PLAYER_MODEL or EURO_SOURCE == "espn":
                     eh, ed, ea = espn_odds(e_)
                     erows.append({"event_id": str(e_["id"]), "Competition": comp,
                                   "Date": pd.Timestamp(e_["date"]).tz_convert(None).normalize(),
+                                  "Kickoff": pd.Timestamp(e_["date"]).tz_convert(None),          # v33: the time too
                                   "completed": bool(st.get("completed")),
                                   "extra_time": any(x in f"{st.get('name', '')} {st.get('description', '')}".upper() for x in ["AET", "PEN", "EXTRA"]),
                                   "home_espn": cs["home"]["team"]["displayName"], "away_espn": cs["away"]["team"]["displayName"],

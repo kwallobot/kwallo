@@ -160,6 +160,7 @@ if PA_KEY:
                     SOLO["Egyptian Premier League"] = {"data": egy, "season": str(egy["Season"].iloc[-1]), "half_life": 180, "group": "Africa"}
                     up_ = eg_[(eg_["status"] != "finished") & (eg_["d"] >= TODAY) & (eg_["d"] <= TODAY + pd.Timedelta(days=PREDICT_DAYS))]
                     EXTRA_FIXTURES = pd.concat([EXTRA_FIXTURES, pd.DataFrame({"League": "Egyptian Premier League", "Date": up_["d"],
+                                                                              "Kickoff": pd.to_datetime(up_["date"], utc=True, errors="coerce").dt.tz_convert(None),
                                                                               "HomeTeam": up_["home"], "AwayTeam": up_["away"]})], ignore_index=True)
                     print(f"PitchAPI: Egyptian Premier League, {len(egy)} results and {len(up_)} upcoming fixtures.")
                     health("Egyptian Premier League (PitchAPI)", True, f"{len(egy)} results, {len(up_)} upcoming")

@@ -264,7 +264,8 @@ def build(ns, data_dir, mode, write, slug, clean):
     for lg, pss in by_league.items():
         ours = pa_to_ours.get(lg, lg)
         rows = [{"slug": ps, "name": players[ps]["name"], "team": players[ps]["team"], "team_slug": players[ps]["team_slug"], "matches": players[ps]["matches"],
-                 "minutes": players[ps]["minutes"], "stats": {k: v.get("per90", v.get("average")) for k, v in players[ps]["stats"].items()},
+                 "minutes": players[ps]["minutes"],
+                 "stats": {k: {"p90": v.get("per90"), "total": v.get("total", v.get("average"))} for k, v in players[ps]["stats"].items()},   # v33: both
                  "totals": {k: v.get("total") for k, v in players[ps]["stats"].items() if "total" in v}} for ps in pss]
         n_files += write(f"site/leaders/{slug(ours)}.json", clean({"competition": ours, "labels": labels, "players": rows}))
     # ---------- teams ----------

@@ -161,6 +161,29 @@ if len(euro): parts_.append(_res(euro, "Competition"))
 if len(other_dom): parts_.append(_res(other_dom, "League"))
 if "div2" in globals() and len(div2): parts_.append(_res(div2, "League"))
 if "cup_results" in globals() and len(cup_results): parts_.append(_res(cup_results, "League"))
+# v33: the last few days' final scores from ESPN (football-data.co.uk adds them a day or two later; its fuller rows win once there)
+recent_rows = []
+for code_, lg_ in (ESPN_LEAGUES.items() if "ESPN_LEAGUES" in globals() else []):
+    for back_ in range(1, 4):
+        day_ = TODAY - pd.Timedelta(days=back_)
+        try:
+            board_ = espn_get(f"{ESPN_BASE}/{code_}/scoreboard?dates={day_:%Y%m%d}", pause=0.3) or {}
+        except Exception:
+            continue
+        for ev_ in board_.get("events", []):
+            if not ev_.get("status", {}).get("type", {}).get("completed"):
+                continue
+            cs_ = {c["homeAway"]: c for c in ev_["competitions"][0]["competitors"]}
+            if "home" not in cs_ or "away" not in cs_:
+                continue
+            nm = lambda c: team_map.get((lg_, c["team"]["displayName"]), c["team"]["displayName"]) if "team_map" in globals() else c["team"]["displayName"]
+            st_ = lambda c, n: next((float(x["displayValue"]) for x in c.get("statistics", []) if x.get("name") == n), np.nan)
+            recent_rows.append({"Comp": lg_, "Date": pd.Timestamp(ev_["date"]).tz_convert(None).normalize(), "HomeTeam": nm(cs_["home"]), "AwayTeam": nm(cs_["away"]),
+                                "FTHG": float(cs_["home"].get("score", np.nan)), "FTAG": float(cs_["away"].get("score", np.nan)),
+                                "HC": st_(cs_["home"], "wonCorners"), "AC": st_(cs_["away"], "wonCorners")})
+if recent_rows:
+    parts_.append(pd.DataFrame(recent_rows))
+    print(f"Recent results from ESPN (last 3 days, for settling picks quickly): {len(recent_rows)} matches.")
 RES = pd.concat(parts_, ignore_index=True)
 RES["Date"] = pd.to_datetime(RES["Date"]).dt.normalize()
 for c_ in ["FTHG", "FTAG", "HS", "AS", "HST", "AST", "HC", "AC", "HY", "AY", "HR", "AR", "HF", "AF"]:

@@ -199,7 +199,8 @@ if INCLUDE_NEW_LEAGUES and _BK:
             url_, params_ = (js_.get("next"), None) if isinstance(js_, dict) and js_.get("next") else (None, None)
             if not url_:
                 break
-        ev_ = pd.DataFrame([{"Date": pd.Timestamp(e_.get("event_date") or e_.get("date")).tz_convert(None).normalize(), "home": e_.get("home_team"),
+        ev_ = pd.DataFrame([{"Date": pd.Timestamp(e_.get("event_date") or e_.get("date")).tz_convert(None).normalize(),
+                             "Kickoff": pd.Timestamp(e_.get("event_date") or e_.get("date")).tz_convert(None), "home": e_.get("home_team"),
                              "away": e_.get("away_team"), "status": str(e_.get("status")).lower(), "hs": e_.get("home_score"), "as_": e_.get("away_score")}
                             for e_ in rows_ if (e_.get("event_date") or e_.get("date"))])
         name_ = "NPFL (Nigeria)"
@@ -232,7 +233,8 @@ if INCLUDE_NEW_LEAGUES and _BK:
             up_ = ev_[(ev_["status"].isin(["notstarted", "scheduled"])) & (ev_["Date"] >= TODAY) & (ev_["Date"] <= TODAY + pd.Timedelta(days=PREDICT_DAYS))]
             if "EXTRA_FIXTURES" not in globals():
                 EXTRA_FIXTURES = pd.DataFrame(columns=["League", "Date", "HomeTeam", "AwayTeam"])
-            EXTRA_FIXTURES = pd.concat([EXTRA_FIXTURES, pd.DataFrame({"League": name_, "Date": up_["Date"], "HomeTeam": up_["HomeTeam"], "AwayTeam": up_["AwayTeam"]})],
+            EXTRA_FIXTURES = pd.concat([EXTRA_FIXTURES, pd.DataFrame({"League": name_, "Date": up_["Date"], "Kickoff": up_["Kickoff"],
+                                                                      "HomeTeam": up_["HomeTeam"], "AwayTeam": up_["AwayTeam"]})],
                                        ignore_index=True)
             new_clubs = sorted((set(cur_["HomeTeam"]) | set(cur_["AwayTeam"])) - set(known_))
             print(f"NPFL from BSD: {len(cur_)} results this season, {len(up_)} upcoming fixtures; names matched: "

@@ -14,20 +14,25 @@
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="#/" aria-label="Kwallo home"><img src="logo.svg" alt="" width="34" height="34"><span>kwallo</span></a>
+  <a class="brand" href="#/" aria-label="Kwallo: football, decoded. Home"><img src="logo.svg" alt="" width="36" height="36">
+    <span class="wordmark"><span>kwallo</span><small>football, decoded.</small></span></a>
   <nav class="rail" aria-label="Main">
     <a href="#/" data-nav="today">Today</a><a href="#/leagues" data-nav="leagues">Leagues</a><a href="#/angles" data-nav="angles">Best angles</a>
     <a href="#/track" data-nav="track">Track record</a><a href="#/acca" data-nav="acca">Accumulator <b class="acca-count" hidden></b></a><a href="#/more" data-nav="more">More</a>
   </nav>
+  <div class="tg" aria-label="Kwallo on Telegram">
+    <a class="tg-channel" href="#" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.5 4.5 2.8 11.7c-1 .4-1 1.6.1 1.9l4.6 1.4 1.8 5.4c.2.7 1.1.9 1.6.4l2.6-2.4 4.8 3.5c.6.4 1.4.1 1.6-.6l3.2-15.4c.2-.9-.7-1.6-1.6-1.4Z" fill="currentColor"/></svg>Channel</a>
+    <a class="tg-bot" href="#" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v4l-2 3h16l-2-3V9a6 6 0 0 0-6-6Zm-2.5 15a2.5 2.5 0 0 0 5 0Z" fill="currentColor"/></svg>Alerts</a>
+  </div>
 </header>
 <main id="app" tabindex="-1"><p class="loading">Loading today's matches…</p></main>
 <footer class="foot">
   <p>Kwallo shows model probabilities, not guarantees. Odds are fair odds, the break-even price. 18+ only. If betting stops being fun, take a break.</p>
-  <p><a href="#/about">About</a> <a href="#/privacy">Privacy</a> <a href="#/terms">Terms</a> <a class="tg-channel" href="#">Telegram channel</a></p>
+  <p><a href="#/about">About</a> <a href="#/privacy">Privacy</a> <a href="#/terms">Terms</a></p>
 </footer>
 <nav class="bottom" aria-label="Main">
   <a href="#/" data-nav="today">Today</a><a href="#/leagues" data-nav="leagues">Leagues</a><a href="#/angles" data-nav="angles">Angles</a>
-  <a href="#/track" data-nav="track">Record</a><a href="#/more" data-nav="more">More</a>
+  <a href="#/acca" data-nav="acca">Acca <b class="acca-count" hidden></b></a><a href="#/track" data-nav="track">Record</a><a href="#/more" data-nav="more">More</a>
 </nav>
 <script src="app.js"></script>
 </body>

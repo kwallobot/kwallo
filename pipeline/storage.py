@@ -52,6 +52,8 @@ def sync_up(local, seen, prefix="data/"):
         for f in files:
             path = os.path.join(root, f)
             rel = os.path.relpath(path, local).replace(os.sep, "/")
+            if rel.startswith("site/") and rel.count("/") >= 2:
+                continue                                        # v33: website pages are published to site/ already
             if rel in seen and "-" not in seen[rel] and _md5(path) == seen[rel]:
                 continue
             c.upload_file(path, bucket, prefix + rel)
@@ -59,6 +61,35 @@ def sync_up(local, seen, prefix="data/"):
             n += 1
     print(f"Storage: {n} files uploaded to R2.")
     return seen
+
+import threading
+from concurrent.futures import ThreadPoolExecutor
+_POOL, _FUTURES, _LOCK = None, [], threading.Lock()
+
+def put_public_async(key, body, content_type="application/json"):
+    """v33: queue an upload; up to 24 run at once. Call flush() to wait for them all."""
+    global _POOL
+    c, bucket = _client()
+    if c is None:
+        return False
+    with _LOCK:
+        if _POOL is None:
+            _POOL = ThreadPoolExecutor(max_workers=24)
+        _FUTURES.append((key, _POOL.submit(c.put_object, Bucket=bucket, Key=key, Body=body, ContentType=content_type, CacheControl="public, max-age=120")))
+    return True
+
+def flush():
+    """Wait for queued uploads; returns (number done, list of keys that failed)."""
+    global _FUTURES
+    with _LOCK:
+        fs, _FUTURES = _FUTURES, []
+    done, failed = 0, []
+    for key, f in fs:
+        try:
+            f.result(); done += 1
+        except Exception:
+            failed.append(key)
+    return done, failed
 
 def put_public(key, body, content_type="application/json"):
     """Write one file to the site/ area of the bucket (what the web app and the Telegram bot read)."""
@@ -80,6 +111,8 @@ def backup(prefix="data/", keep_weekly=4, keep_monthly=6):
     n = 0
     for page in c.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
         for o in page.get("Contents", []):
+            if o["Key"].startswith(prefix + "site/") and o["Key"][len(prefix):].count("/") >= 2:
+                continue                                        # v33: website pages aren't backed up (rebuilt every run)
             c.copy_object(Bucket=bucket, Key=f"backups/{today}/{o['Key'][len(prefix):]}", CopySource={"Bucket": bucket, "Key": o["Key"]})
             n += 1
     dates = set()

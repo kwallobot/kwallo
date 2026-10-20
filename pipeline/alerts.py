@@ -215,11 +215,18 @@ def channel_posts(data_dir, mode):
     if os.path.exists(vl):
         v = pd.read_csv(vl)
         if "won" in v:
-            yv = v[(v["Date"].astype(str) == yday) & (v["kind"] == "best")].dropna(subset=["won"])
-            if len(yv) >= 3:
+            yall = v[(v["Date"].astype(str) == yday) & (v["kind"] == "best")]
+            yv = yall.dropna(subset=["won"])
+            pending = len(yall) - len(yv)
+            if not len(yv):                                       # v33: never silent, so "nothing to report" is visible
+                txt = (f"🏁 <b>Yesterday's top angles</b>: " + (f"none settled yet ({pending} still waiting for final scores; they'll be counted in the track record)."
+                                                               if pending else "no settled picks from yesterday."))
+                n += _post(token, channel, txt, sent, f"results|{yday}")
+            if len(yv) >= 1:
                 rows = [f"{'✅' if r.won > 0 else '❌'} {html.escape(str(r.Home))} v {html.escape(str(r.Away))}: {html.escape(str(r.Bet))} ({_pct(r.p)})" for r in yv.head(20).itertuples()]
                 txt = (f"🏁 <b>Yesterday's top angles</b>: {int(yv['won'].sum())} of {len(yv)} landed "
                        f"({100 * yv['won'].mean():.0f}% vs {100 * yv['p'].mean():.0f}% the model expected)\n\n" + "\n".join(rows) + (f'\n\n<a href="{os.environ.get("SITE_URL", "").rstrip("/")}/#/track">Full track record</a>' if os.environ.get("SITE_URL") else "")
+                       + (f"\n\n{pending} more still waiting for final scores." if pending else "")
                        + "\n\n<i>A hit rate close to the expected one means the probabilities are honest. 18+.</i>")
                 n += _post(token, channel, txt[:4000], sent, f"results|{yday}")
             # 4. Mondays (full run): the week's track record

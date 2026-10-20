@@ -41,7 +41,7 @@ EURO_PLAYER_ADJUST = True        # player adjustment in European matches (helped
 RUN_EURO_SELECTION = True        # replay European matches to pick the best setting (first run is slow; then only new weeks)
 
 # Extra sources for the Experiments section (section 10). They don't change predictions until switched on there.
-USE_CLUBELO = True
+USE_CLUBELO = False              # v33: off; ClubElo's service is usually down, and it only fed one experiment (never adopted)
 USE_UNDERSTAT = True        # also needed for XG_WEIGHT
 RUN_EXPERIMENTS = True
 ELO_NAME_FIXES = {}      # if a ClubElo link is wrong: {"Our name": "ClubElo name"}

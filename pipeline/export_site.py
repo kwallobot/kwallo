@@ -47,6 +47,12 @@ def export(ns, data_dir, mode):
     if fx is not None and len(fx) and "Kickoff" in fx:
         for r in fx.itertuples():
             kick[(r.League, str(r.Date)[:10], r.HomeTeam, r.AwayTeam)] = pd.Timestamp(r.Kickoff).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # v33: kickoff times from every source: European cups (ESPN) and the fixtures added from PitchAPI (Egypt) and BSD (NPFL)
+    for frame_, comp_col_, h_, a_ in [(ns.get("euro_up"), "Competition", "HomeTeam", "AwayTeam"), (ns.get("EXTRA_FIXTURES"), "League", "HomeTeam", "AwayTeam")]:
+        if frame_ is not None and len(frame_) and "Kickoff" in frame_:
+            for r in frame_.dropna(subset=["Kickoff"]).itertuples():
+                k_ = (getattr(r, comp_col_), str(r.Date)[:10], getattr(r, h_), getattr(r, a_))
+                kick.setdefault(k_, pd.Timestamp(r.Kickoff).strftime("%Y-%m-%dT%H:%M:%SZ"))
     get = lambda name, k: (P.get(name) or {}).get("|".join(k))
     # v31: ESPN identifiers for each fixture, so the Worker can follow it live
     espn_ids = {}
@@ -105,17 +111,21 @@ def export(ns, data_dir, mode):
         local = os.path.join(data_dir, key)
         os.makedirs(os.path.dirname(local), exist_ok=True)
         open(local, "w").write(body)
-        n_up += storage.put_public(key, body.encode("utf-8"))
+        n_up += storage.put_public_async(key, body.encode("utf-8"))
     print(f"Export: {len(matches)} matches, {len(details)} match files, {len(teams)} teams written" + (f"; {n_up} uploaded to R2." if n_up else " (local only)."))
     # v32: the website's other pages, each file uploaded only when its contents changed
+    # v33: a fingerprint per published file (kept with the data), so only files whose contents changed are uploaded,
+    #      and uploads run in parallel
+    import hashlib
+    man_path = os.path.join(data_dir, "site_manifest.json")
+    manifest = json.load(open(man_path)) if os.path.exists(man_path) else {}
     def write(key, obj):
-        body = json.dumps(obj, ensure_ascii=False, allow_nan=False, default=str)
-        local = os.path.join(data_dir, key)
-        if os.path.exists(local) and open(local, encoding="utf-8").read() == body:
+        body = json.dumps(obj, ensure_ascii=False, allow_nan=False, default=str).encode("utf-8")
+        h = hashlib.md5(body).hexdigest()
+        if manifest.get(key) == h:
             return 0
-        os.makedirs(os.path.dirname(local), exist_ok=True)
-        open(local, "w", encoding="utf-8").write(body)
-        storage.put_public(key, body.encode("utf-8"))
+        if storage.put_public_async(key, body) or not os.environ.get("R2_BUCKET"):
+            manifest[key] = h
         return 1
     try:
         import export_pages
@@ -123,3 +133,11 @@ def export(ns, data_dir, mode):
     except Exception:
         import traceback; traceback.print_exc()
         print("Website pages: failed this run (match pages and the bot are unaffected).")
+    done_, failed_ = storage.flush()
+    for k_ in failed_:                                               # failed uploads: forget their fingerprints, so they retry next run
+        manifest.pop(k_, None)
+    if failed_:
+        print(f"Website pages: {len(failed_)} uploads failed; they'll be retried next run.")
+    json.dump(manifest, open(man_path, "w"))
+    if done_:
+        print(f"Website pages: {done_} files uploaded (24 at a time).")

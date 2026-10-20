@@ -3,7 +3,8 @@
   "use strict";
   const C = window.KWALLO || {};
   const API = C.api || "/api/site/";
-  const app = document.getElementById("app");
+  const shell = document.getElementById("app");
+  let app = shell, routeSeq = 0;                                     // pages render off-screen; only the latest request is shown
   const cache = {};
   const BIG = ["Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions League", "Europa League", "Conference League"];
   const EUROPE_CUPS = ["Champions League", "Europa League", "Conference League"];
@@ -26,7 +27,8 @@
   function hit(feature) { try { navigator.sendBeacon(API.replace(/\/api\/site\/?$/, "/api/hit"), JSON.stringify({ f: feature })); } catch (e) {} }
   const localDay = d => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
   const matchDay = m => (m.kickoff ? localDay(m.kickoff) : String(m.Date || m.date).slice(0, 10));
-  const timeOf = m => (m.kickoff ? new Date(m.kickoff).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "TBC");
+  const timeOf = m => (m.kickoff ? new Date(m.kickoff).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "–");
+  const fmtSeason = s => { s = String(s || ""); return /^\d{4}$/.test(s) && !/^(19|20)\d{2}$/.test(s) ? `20${s.slice(0, 2)}/${s.slice(2)}` : s; };
   function dayLabel(d) {
     const today = localDay(Date.now()), tom = localDay(Date.now() + 864e5), yest = localDay(Date.now() - 864e5);
     if (d === today) return "Today"; if (d === tom) return "Tomorrow"; if (d === yest) return "Yesterday";
@@ -50,18 +52,19 @@
     return `<div class="bar" role="img" aria-label="${esc(names[0])} ${pct(h)}, draw ${pct(d)}, ${esc(names[1])} ${pct(a)}">`
       + `<i class="h" style="flex-basis:${100 * h}%"></i><i class="d" style="flex-basis:${100 * d}%"></i><i class="a" style="flex-basis:${100 * a}%"></i></div>`;
   }
+  // a ★ beside each team's name: tap to add that team to favourites (the row itself opens the match)
+  const teamStar = (slug, name) => slug ? `<button class="star small-star ${fav.has("team:" + slug) ? "on" : ""}" data-fav="team:${esc(slug)}" aria-label="Favourite ${esc(name)}" title="Favourite ${esc(name)}">★</button>` : "";
   function matchRow(m) {
-    const starred = fav.has("team:" + m.home_slug) || fav.has("team:" + m.away_slug);
     return `<a class="match" href="#/match/${esc(m.slug)}">
-      <div class="row"><span class="num muted">${esc(timeOf(m))}</span><span class="teams">${esc(m.Home)} v ${esc(m.Away)}</span>
-        ${m.home_slug ? `<button class="star ${starred ? "on" : ""}" data-fav="team:${esc(m.home_slug)}" aria-label="Favourite ${esc(m.Home)}">★</button>` : "<span></span>"}</div>
+      <div class="row"><span class="num muted" ${m.kickoff ? "" : 'title="Kickoff time not announced yet"'}>${esc(timeOf(m))}</span>
+        <span class="teams"><span class="team">${esc(m.Home)}${teamStar(m.home_slug, m.Home)}</span> <span class="muted">v</span> <span class="team">${esc(m.Away)}${teamStar(m.away_slug, m.Away)}</span></span><span></span></div>
       ${chanceBar(m, [m.Home, m.Away])}
       <div class="bar-legend num"><span>${pct(m.pH)}</span><span>draw ${pct(m.pD)}</span><span>${pct(m.pA)}</span></div>
       ${m.top_pick ? `<div class="pick">Top angle: <b>${esc(m.top_pick.Bet)}</b>, ${pct(m.top_pick.p)}, fair ${odds(m.top_pick.fair)}</div>` : ""}
     </a>`;
   }
   const selId = (slug, bet) => `${slug}|${bet}`;
-  function accaBtn(sel) { return `<button class="btn ${acca.has(sel.id) ? "added" : ""}" data-acca="${esc(JSON.stringify(sel))}">${acca.has(sel.id) ? "In accumulator" : "Add to accumulator"}</button>`; }
+  function accaBtn(sel) { return `<button class="btn mini ${acca.has(sel.id) ? "added" : ""}" data-acca="${esc(JSON.stringify(sel))}" aria-label="${acca.has(sel.id) ? "Remove from" : "Add to"} accumulator">${acca.has(sel.id) ? "✓ In acca" : "+ Acca"}</button>`; }
   function alertsLink(slug, label) {
     return C.bot ? `<a class="btn solid cta-tg" href="${tg(C.bot + "?start=team_" + encodeURIComponent(slug))}" target="_blank" rel="noopener">${esc(label)}</a>` : "";
   }
@@ -122,7 +125,7 @@
       const r = rounds.find(x => x.round === cur) || rounds[rounds.length - 1];
       body = r ? `<div class="tabs">${rounds.map(x => `<button class="${x.round === r.round ? "on" : ""}" data-go="#/comp/${slug}/matches/${x.round}" aria-label="Matchday ${x.round}">${x.round}</button>`).join("")}</div>
         <h2>Matchday ${r.round}</h2><ul class="list">${r.matches.map(m => `<li class="num">${esc(m.date)}:
-          <a href="#/team/${esc(m.home_slug)}">${esc(m.home)}</a> ${m.played ? `<b>${esc(m.score)}</b>` : "v"} <a href="#/team/${esc(m.away_slug)}">${esc(m.away)}</a>
+          <a href="#/team/${esc(m.home_slug)}">${esc(m.home)}</a>${teamStar(m.home_slug, m.home)} ${m.played ? `<b>${esc(m.score)}</b>` : "v"} <a href="#/team/${esc(m.away_slug)}">${esc(m.away)}</a>${teamStar(m.away_slug, m.away)}
           ${m.slug ? ` <a class="small" href="#/match/${esc(m.slug)}">Prediction</a>` : ""}</li>`).join("")}</ul>` : empty("No matchdays yet.");
     } else if (tab === "table") {
       body = (c.table || []).length ? `<div class="wrap"><table><thead><tr><th>#</th><th>Team</th><th class="r">P</th><th class="r">W</th><th class="r">D</th><th class="r">L</th><th class="r">GD</th><th class="r">Pts</th><th>Form</th></tr></thead><tbody>
@@ -132,7 +135,8 @@
     } else {
       body = await leadersTable(slug);
     }
-    app.innerHTML = `<h1>${esc(c.name)}</h1><p class="muted">${c.season ? `Season ${esc(c.season)}. ` : ""}<button class="star ${fav.has("comp:" + slug) ? "on" : ""}" data-fav="comp:${esc(slug)}" aria-label="Favourite">★</button> Favourite</p>
+    app.innerHTML = `<h1 class="title-row"><span>${esc(c.name)}</span><button class="star ${fav.has("comp:" + slug) ? "on" : ""}" data-fav="comp:${esc(slug)}" aria-label="Favourite ${esc(c.name)}" title="Favourite">★</button></h1>
+      ${c.season ? `<p class="muted">Season ${esc(fmtSeason(c.season))}</p>` : ""}
       <div class="tabs">${t("matches", "Matchdays")}${t("table", "Table")}${t("leaders", "Leaders")}</div>${body}`;
     hit("competition");
   }
@@ -141,18 +145,35 @@
     let L;
     try { L = await get(`leaders/${slug}.json`); } catch (e) { return empty("Player statistics for this competition aren't available yet."); }
     const labels = L.labels || {};
-    const keys = Object.keys(labels).sort((a, b) => (labels[a].order || 0) - (labels[b].order || 0));
+    const keys = Object.keys(labels).filter(k => !/^minutes/.test(k)).sort((a, b) => (labels[a].order || 0) - (labels[b].order || 0));
     if (!keys.length) return empty("Player statistics for this competition aren't available yet.");
-    const sortKey = store.get("leaders_sort:" + slug, keys.includes("goals") ? "goals" : keys[0]);
+    const val = (p, k, mode) => {                                // new files hold {p90, total}; older ones a single per-90 number
+      if (k === "minutes") return p.minutes || 0;
+      const x = p.stats && p.stats[k];
+      if (x == null) return null;
+      if (typeof x === "object") return mode === "total" ? x.total : (x.p90 != null ? x.p90 : (p.minutes ? 90 * (x.total || 0) / p.minutes : null));
+      return mode === "total" ? (p.minutes ? x * p.minutes / 90 : null) : x;
+    };
+    const isAvg = k => { const l = labels[k] || {}; return ["double", "percent", "rating"].includes(l.type) || /rating|percent|accuracy|pct/.test(k); };   // averages: no per-90 or total
+    const hasData = k => (L.players || []).some(p => val(p, k, "total") != null);
+    const def = ["goals", "expected_goals"].find(k => keys.includes(k) && hasData(k)) || keys.find(hasData) || keys[0];
+    let [sortKey, sortMode, dir] = store.get("leaders_sort2:" + slug, [def, "p90", -1]);
+    if (sortKey !== "minutes" && !keys.includes(sortKey)) [sortKey, sortMode, dir] = [def, "p90", -1];
     const minMin = store.get("leaders_min", 270);
-    const v = (p, k) => (p.stats && p.stats[k] != null ? (typeof p.stats[k] === "object" ? p.stats[k].total : p.stats[k]) : null);
-    const rows = (L.players || []).filter(p => (p.minutes || 0) >= minMin).sort((a, b) => (v(b, sortKey) || 0) - (v(a, sortKey) || 0)).slice(0, 50);
-    const showKeys = [sortKey, ...keys.filter(k => k !== sortKey).slice(0, 5)];
-    return `<p class="small muted"><label>Players with at least <select data-leaders-min>${[0, 270, 450, 900].map(x => `<option value="${x}" ${x === minMin ? "selected" : ""}>${x}</option>`).join("")}</select> minutes</label></p>
-      <p><label>Sort by <select data-leaders-sort="${esc(slug)}">${keys.map(k => `<option value="${esc(k)}" ${k === sortKey ? "selected" : ""}>${esc(labels[k].label || k)}</option>`).join("")}</select></label></p>
-      <div class="wrap"><table><thead><tr><th>Player</th><th>Team</th><th class="r">Min</th>${showKeys.map(k => `<th class="r ${k === sortKey ? "sorted" : ""}">${esc(labels[k].label || k)}</th>`).join("")}</tr></thead>
+    const rows = (L.players || []).filter(p => (p.minutes || 0) >= minMin)
+      .sort((a, b) => dir * ((val(a, sortKey, sortMode) ?? -1e9) - (val(b, sortKey, sortMode) ?? -1e9))).slice(0, 60);
+    const shown = (sortKey === "minutes" ? [] : [sortKey]).concat(keys.filter(k => k !== sortKey && hasData(k))).slice(0, 4);
+    const fmt = x => (x == null || !isFinite(x) ? "–" : (Math.abs(x) >= 10 ? Math.round(x) : Math.round(x * 100) / 100));
+    const th = (k, mode, label, sub) => { const on = k === sortKey && mode === sortMode;
+      return `<th class="r ${on ? "sorted" : ""}" data-sort="${esc(slug)}|${esc(k)}|${mode}" aria-sort="${on ? (dir < 0 ? "descending" : "ascending") : "none"}">${esc(label)}${on ? (dir < 0 ? " ↓" : " ↑") : ""}${sub ? `<small>${sub}</small>` : ""}</th>`; };
+    return `<p class="small muted"><label>Players with at least <select data-leaders-min>${[0, 270, 450, 900].map(x => `<option value="${x}" ${x === minMin ? "selected" : ""}>${x}</option>`).join("")}</select> minutes</label>.
+        Tap a column heading to sort by it.</p>
+      <p><label>Sort by <select data-leaders-sort="${esc(slug)}">${keys.filter(hasData).map(k => `<option value="${esc(k)}" ${k === sortKey ? "selected" : ""}>${esc(labels[k].label || k)}${isAvg(k) ? " (average)" : " per 90"}</option>`).join("")}
+        <option value="minutes" ${sortKey === "minutes" ? "selected" : ""}>Minutes played (total)</option></select></label></p>
+      <div class="wrap"><table class="leaders"><thead><tr><th>Player</th><th>Team</th>${th("minutes", "total", "Minutes", "total")}
+        ${shown.map(k => isAvg(k) ? th(k, "total", labels[k].label || k, "average") : th(k, "p90", labels[k].label || k, "per 90") + th(k, "total", labels[k].label || k, "total")).join("")}</tr></thead>
       <tbody>${rows.map(p => `<tr><td><a href="#/player/${esc(p.slug)}">${esc(p.name)}</a></td><td class="small">${esc(p.team)}</td><td class="r num">${p.minutes || 0}</td>
-        ${showKeys.map(k => { const x = v(p, k); return `<td class="r num">${x != null ? Math.round(x * 10) / 10 : "–"}</td>`; }).join("")}</tr>`).join("")}</tbody></table></div>
+        ${shown.map(k => isAvg(k) ? `<td class="r num">${fmt(val(p, k, "total"))}</td>` : `<td class="r num">${fmt(val(p, k, "p90"))}</td><td class="r num tot">${fmt(val(p, k, "total"))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
       ${rows.length ? "" : empty("No players reach that many minutes yet.")}`;
   }
 
@@ -189,9 +210,9 @@
         <p>${hs ? alertsLink(hs, `Get alerts for ${H}`) : ""} ${as ? alertsLink(as, `Get alerts for ${A}`) : ""}</p>
       </section>
       ${v.best && v.best.length ? `<section class="section"><h2>Verdict</h2><ul class="list">${v.best.map(b => `<li class="angle"><span><b>${esc(b.Bet)}</b><br><span class="small muted">Fair odds ${odds(b.fair)}</span></span>
-          <span class="p num">${pct(b.p)}</span><span class="why">${esc((b.reasons || []).join(" ") || b.evidence || "")} ${accaBtn(sel(b.Bet, b.p, b.fair))}</span></li>`).join("")}
-        ${v.safer ? `<li class="angle"><span>Safer angle: <b>${esc(v.safer.Bet)}</b><br><span class="small muted">Fair odds ${odds(v.safer.fair)}</span></span><span class="p num">${pct(v.safer.p)}</span>
-          <span class="why">${accaBtn(sel(v.safer.Bet, v.safer.p, v.safer.fair))}</span></li>` : ""}</ul>
+          <span class="side"><span class="p num">${pct(b.p)}</span>${accaBtn(sel(b.Bet, b.p, b.fair))}</span><span class="why">${esc((b.reasons || []).join(" ") || b.evidence || "")}</span></li>`).join("")}
+        ${v.safer ? `<li class="angle"><span>Safer angle: <b>${esc(v.safer.Bet)}</b><br><span class="small muted">Fair odds ${odds(v.safer.fair)}</span></span>
+          <span class="side"><span class="p num">${pct(v.safer.p)}</span>${accaBtn(sel(v.safer.Bet, v.safer.p, v.safer.fair))}</span></li>` : ""}</ul>
         ${(v.avoid || []).length ? `<p class="small"><b>Avoid:</b> ${v.avoid.map(esc).join(" ")}</p>` : ""}</section>` : ""}
       ${extra.length ? `<section class="section"><h2>Goals, corners and cards</h2><ul class="list">${extra.map(([n, p]) => `<li class="angle"><span>${esc(n)}<br><span class="small muted">Fair odds ${odds(1 / p)}</span></span><span class="p num">${pct(p)}</span></li>`).join("")}</ul></section>` : ""}
       ${markets.length ? `<section class="section"><h2>More markets</h2>${Object.entries(fam).map(([f, xs]) => `<h3>${esc(f.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()))}</h3><div class="wrap"><table><tbody>
@@ -251,8 +272,8 @@
     app.innerHTML = `<h1>Best angles</h1><p class="muted">The strongest picks across all competitions, ranked. Each one is only worth taking above its fair odds.</p>
       ${list.length ? `<ul class="list">${list.map(a => `<li class="angle"><span><b>${esc(a.Bet)}</b><br><a class="small" href="#/match/${esc(a.slug)}">${esc(a.home)} v ${esc(a.away)}</a>
           <span class="small muted">, ${esc(a.competition)}, ${esc(a.kickoff ? new Date(a.kickoff).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : a.date)}</span></span>
-          <span class="p num">${pct(a.p)}<br><span class="small muted">fair ${odds(a.fair)}</span></span>
-          <span class="why">${esc((a.reasons || []).join(" ") || a.evidence || "")} ${accaBtn({ id: selId(a.slug, a.Bet), match: `${a.home} v ${a.away}`, slug: a.slug, bet: a.Bet, p: a.p, fair: a.fair })}</span></li>`).join("")}</ul>`
+          <span class="side"><span class="p num">${pct(a.p)}</span><span class="small muted">fair ${odds(a.fair)}</span>${accaBtn({ id: selId(a.slug, a.Bet), match: `${a.home} v ${a.away}`, slug: a.slug, bet: a.Bet, p: a.p, fair: a.fair })}</span>
+          <span class="why">${esc((a.reasons || []).join(" ") || a.evidence || "")}</span></li>`).join("")}</ul>`
         : empty("No angles yet for the coming days. They appear after the morning update.")}`;
     hit("best_angles");
   }
@@ -332,6 +353,8 @@
 
   // ---------- router
   async function route() {
+    const my = ++routeSeq;
+    app = document.createElement("div");
     const parts = (location.hash.replace(/^#\/?/, "") || "").split("/").map(decodeURIComponent);
     try { window.scrollTo(0, 0); } catch (e) {}
     try {
@@ -355,29 +378,42 @@
     } catch (e) {
       app.innerHTML = `<h1>Couldn't load this page</h1>${empty(`The data didn't arrive (${esc(e.message)}). Check your connection and <a href="${esc(location.hash || "#/")}">try again</a>.`)}`;
     }
-    try { app.focus({ preventScroll: true }); } catch (e) {}
+    if (my === routeSeq) { shell.innerHTML = app.innerHTML; try { shell.focus({ preventScroll: true }); } catch (e) {} }   // a newer page won: drop this one
+    app = shell;
   }
 
   // ---------- one listener for every button
   document.addEventListener("click", ev => {
+    const th = ev.target.closest("th[data-sort]");
+    if (th) {
+      const [slug, k, mode] = th.dataset.sort.split("|");
+      const cur = store.get("leaders_sort2:" + slug, null);
+      store.set("leaders_sort2:" + slug, [k, mode, cur && cur[0] === k && cur[1] === mode ? -cur[2] : -1]);
+      hit("leaders_sort"); route(); return;
+    }
     const el = ev.target.closest("[data-go],[data-fav],[data-acca],[data-acca-clear]");
     if (!el) return;
     if (el.dataset.go) { location.hash = el.dataset.go; return; }
     ev.preventDefault(); ev.stopPropagation();
-    if (el.dataset.fav) { fav.toggle(el.dataset.fav); el.classList.toggle("on"); return; }
+    if (el.dataset.fav) { fav.toggle(el.dataset.fav); const on = fav.has(el.dataset.fav);
+      document.querySelectorAll(`[data-fav="${CSS.escape(el.dataset.fav)}"]`).forEach(s => s.classList.toggle("on", on)); return; }
     if (el.hasAttribute("data-acca-clear")) { acca.clear(); route(); return; }
     if (el.dataset.acca) {
       acca.toggle(JSON.parse(el.dataset.acca));
       if (location.hash.startsWith("#/acca")) route();
-      else { el.classList.toggle("added"); el.textContent = el.classList.contains("added") ? "In accumulator" : "Add to accumulator"; }
+      else { el.classList.toggle("added"); el.textContent = el.classList.contains("added") ? "✓ In acca" : "+ Acca"; }
     }
   });
   document.addEventListener("change", ev => {
     const el = ev.target;
-    if (el.matches("[data-leaders-sort]")) { store.set("leaders_sort:" + el.dataset.leadersSort, el.value); route(); hit("leaders_sort"); }
+    if (el.matches("[data-leaders-sort]")) {
+      const avg = /rating|percent|accuracy|pct/.test(el.value);
+      store.set("leaders_sort2:" + el.dataset.leadersSort, [el.value, el.value === "minutes" || avg ? "total" : "p90", -1]); route(); hit("leaders_sort");
+    }
     if (el.matches("[data-leaders-min]")) { store.set("leaders_min", Number(el.value)); route(); }
   });
-  document.querySelectorAll(".tg-channel").forEach(a => { if (C.channel) a.href = tg(C.channel); else a.remove(); });
+  document.querySelectorAll(".tg-channel").forEach(x => { if (C.channel) x.href = tg(C.channel); else x.remove(); });
+  document.querySelectorAll(".tg-bot").forEach(x => { if (C.bot) x.href = tg(C.bot); else x.remove(); });
   if (C.cfAnalyticsToken) {                                       // Cloudflare Web Analytics: cookie-free visitor counts
     const s = document.createElement("script");
     s.defer = true; s.src = "https://static.cloudflareinsights.com/beacon.min.js"; s.setAttribute("data-cf-beacon", JSON.stringify({ token: C.cfAnalyticsToken }));

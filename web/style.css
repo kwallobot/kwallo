@@ -19,7 +19,16 @@ h1 { font-size: clamp(1.9rem, 6vw, 2.6rem); }
 h2 { font-size: 1.35rem; margin-top: 1.6em; }
 h3 { font-size: 1.05rem; }
 .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 1.5rem; padding: .6rem 1rem; background: var(--bg); border-bottom: 1px solid var(--line); }
-.brand { display: flex; align-items: center; gap: .5rem; text-decoration: none; font-weight: 800; font-stretch: 85%; font-size: 1.45rem; letter-spacing: -.02em; }
+.brand { display: flex; align-items: center; gap: .55rem; text-decoration: none; }
+.wordmark { display: flex; align-items: baseline; gap: .45rem; flex-wrap: wrap; line-height: 1; }
+.wordmark > span { font-weight: 800; font-stretch: 85%; font-size: 1.45rem; letter-spacing: -.02em; }
+.wordmark small { color: var(--brand); font-weight: 500; font-size: .95rem; }
+@media (max-width: 520px) { .wordmark { flex-direction: column; align-items: flex-start; gap: .15rem; } .wordmark small { font-size: .78rem; } }
+.tg { margin-left: auto; display: flex; gap: .4rem; }
+.tg a { display: inline-flex; align-items: center; gap: .3rem; text-decoration: none; font-weight: 600; font-size: .85rem; font-stretch: 85%;
+        padding: .35rem .6rem; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); }
+.tg a:hover { border-color: var(--brand); }
+.tg svg { width: 15px; height: 15px; color: var(--brand); }
 .rail { display: none; gap: 1.1rem; }
 .rail a, .bottom a { text-decoration: none; color: var(--muted); font-weight: 600; font-stretch: 85%; }
 .rail a.on, .bottom a.on { color: var(--ink); }
@@ -86,3 +95,22 @@ td.r, th.r { text-align: right; } .wrap { overflow-x: auto; }
 .cta-tg { display: inline-block; margin-top: .5rem; text-decoration: none; }
 .prose { max-width: 65ch; } .prose p, .prose li { color: var(--ink); }
 @media (prefers-reduced-motion: no-preference) { .big .bar i { transition: flex-basis .5s ease-out; } }
+
+/* v33 */
+.bottom a { font-size: .9rem; position: relative; }
+.bottom .acca-count { position: absolute; top: -.45rem; right: -.75rem; min-width: 1.1rem; height: 1.1rem; border-radius: 999px; background: var(--brand);
+                      color: var(--bg); font-size: .7rem; display: inline-flex; align-items: center; justify-content: center; font-stretch: 85%; }
+.title-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.title-row .star { font-size: 1.6rem; }
+.angle { grid-template-columns: 1fr auto; align-items: start; }
+.angle .side { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: .35rem; }
+.btn.mini { padding: .25rem .55rem; font-size: .8rem; white-space: nowrap; }
+.angle .why { grid-column: 1; }
+/* leaders: the player's name stays put while the numbers scroll */
+.wrap table.leaders th:first-child, .wrap table.leaders td:first-child { position: sticky; left: 0; background: var(--bg); z-index: 1; box-shadow: 1px 0 0 var(--line); }
+table.leaders th[data-sort] { cursor: pointer; user-select: none; }
+table.leaders th.sorted { color: var(--brand); }
+table.leaders th small { display: block; font-weight: 500; color: var(--muted); font-size: .72rem; }
+table.leaders td.tot { color: var(--muted); }
+.small-star { font-size: .95rem; padding: 0 .15rem 0 .3rem; vertical-align: 1px; }
+.match .teams .team { white-space: nowrap; }
