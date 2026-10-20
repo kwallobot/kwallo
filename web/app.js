@@ -8,6 +8,29 @@
   const cache = {};
   const BIG = ["Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions League", "Europa League", "Conference League"];
   const EUROPE_CUPS = ["Champions League", "Europa League", "Conference League"];
+  const REGION = { "Premier League": "England", "Championship": "England", "La Liga": "Spain", "Bundesliga": "Germany", "Serie A": "Italy", "Ligue 1": "France",
+    "Eredivisie": "Netherlands", "Primeira Liga": "Portugal", "Belgian Pro League": "Belgium", "Scottish Premiership": "Scotland", "Super Lig": "Turkey",
+    "Greek Super League": "Greece", "MLS": "USA", "Saudi Pro League": "Saudi Arabia", "Liga MX": "Mexico", "Argentina Liga Profesional": "Argentina",
+    "Brasileirão Série A": "Brazil", "Brasileirão Série B": "Brazil", "Bolivia División Profesional": "Bolivia", "South African Premiership": "South Africa",
+    "NPFL (Nigeria)": "Nigeria", "Egyptian Premier League": "Egypt", "Champions League": "Europe", "Europa League": "Europe", "Conference League": "Europe" };
+  let LIVE = {}, liveAt = 0;
+  async function getLive(force) {                                   // live and finished scores, refreshed at most once a minute
+    if (!force && Date.now() - liveAt < 50000) return LIVE;
+    try { const r = await fetch((C.liveApi || API.replace(/\/api\/site\/?$/, "/api/live")), { cache: "no-cache" }); if (r.ok) { LIVE = await r.json(); liveAt = Date.now(); } } catch (e) {}
+    return LIVE;
+  }
+  const folded = k => store.get("fold:" + k, null);
+  function badge(m, side) {
+    const b = ((m.badges || {})[side]) || {}, name = side === "home" ? m.Home : m.Away;
+    const abbr = b.a || String(name || "").split(/\s+/).map(w => w[0]).join("").slice(0, 3).toUpperCase();
+    return `<span class="badge" style="--c:${esc(b.c || "#6F8F84")}" aria-hidden="true">${esc(abbr)}</span>`;
+  }
+  function liveCell(m) {                                             // time column: kickoff / live minute / FT, and the score line
+    const L = LIVE[m.slug];
+    if (L && L.state === "in") return { top: `<b class="live">${esc(L.detail || "Live")}</b>`, live: true, hs: L.hs, as: L.as };
+    if (L && L.state === "post") return { top: `<span class="muted">FT</span>`, hs: L.hs, as: L.as };
+    return { top: `<span ${m.kickoff ? "" : 'title="Kickoff time not announced yet"'}>${esc(timeOf(m))}</span>`, hs: null, as: null };
+  }
 
   // ---------- small helpers
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -55,13 +78,21 @@
   // a ★ beside each team's name: tap to add that team to favourites (the row itself opens the match)
   const teamStar = (slug, name) => slug ? `<button class="star small-star ${fav.has("team:" + slug) ? "on" : ""}" data-fav="team:${esc(slug)}" aria-label="Favourite ${esc(name)}" title="Favourite ${esc(name)}">★</button>` : "";
   function matchRow(m) {
-    return `<a class="match" href="#/match/${esc(m.slug)}">
-      <div class="row"><span class="num muted" ${m.kickoff ? "" : 'title="Kickoff time not announced yet"'}>${esc(timeOf(m))}</span>
-        <span class="teams"><span class="team">${esc(m.Home)}${teamStar(m.home_slug, m.Home)}</span> <span class="muted">v</span> <span class="team">${esc(m.Away)}${teamStar(m.away_slug, m.Away)}</span></span><span></span></div>
-      ${chanceBar(m, [m.Home, m.Away])}
-      <div class="bar-legend num"><span>${pct(m.pH)}</span><span>draw ${pct(m.pD)}</span><span>${pct(m.pA)}</span></div>
-      ${m.top_pick ? `<div class="pick">Top angle: <b>${esc(m.top_pick.Bet)}</b>, ${pct(m.top_pick.p)}, fair ${odds(m.top_pick.fair)}</div>` : ""}
+    const t = liveCell(m), mk = "match:" + m.slug;
+    const line = (side, name, p, sc) => `<span class="mt">${badge(m, side)}<span class="tn">${esc(name)}</span>${sc != null ? `<b class="msc">${sc}</b>` : `<span class="mp num">${pct(p)}</span>`}</span>`;
+    return `<a class="mrow ${t.live ? "is-live" : ""}" href="#/match/${esc(m.slug)}">
+      <span class="mtime num">${t.top}<span class="muted">${t.hs != null ? "" : "–"}</span></span>
+      <span class="mteams">${line("home", m.Home, m.pH, t.hs)}${line("away", m.Away, m.pA, t.as)}
+        <span class="md small muted">Draw ${pct(m.pD)}${m.top_pick ? `, top angle: ${esc(m.top_pick.Bet)} ${pct(m.top_pick.p)}` : ""}</span></span>
+      <button class="star mstar ${fav.has(mk) ? "on" : ""}" data-fav="${esc(mk)}" aria-label="Favourite this match">★</button>
     </a>`;
+  }
+  function compCard(key, name, region, count, body, defaultFolded) {
+    const f = folded(key); const isF = f == null ? !!defaultFolded : f;
+    return `<section class="card ${isF ? "folded" : ""}" data-card="${esc(key)}">
+      <button class="card-h" data-fold="${esc(key)}" aria-expanded="${!isF}"><span class="ct"><b>${esc(name)}</b>${region ? `<small>${esc(region)}</small>` : ""}</span>
+        ${count != null ? `<span class="cnt num">${count}</span>` : ""}<span class="chev" aria-hidden="true">⌃</span></button>
+      <div class="card-b">${body}</div></section>`;
   }
   const selId = (slug, bet) => `${slug}|${bet}`;
   function accaBtn(sel) { return `<button class="btn mini ${acca.has(sel.id) ? "added" : ""}" data-acca="${esc(JSON.stringify(sel))}" aria-label="${acca.has(sel.id) ? "Remove from" : "Add to"} accumulator">${acca.has(sel.id) ? "✓ In acca" : "+ Acca"}</button>`; }
@@ -84,10 +115,12 @@
     filter = filter || "all";
     const favs = new Set(fav.list());
     let list = ms.filter(m => matchDay(m) === day);
+    await getLive();
+    if (filter === "live") list = list.filter(m => (LIVE[m.slug] || {}).state === "in");
     if (filter === "big") list = list.filter(m => BIG.includes(m.Competition));
     if (filter === "europe") list = list.filter(m => EUROPE_CUPS.includes(m.Competition));
     if (filter === "nigeria") list = list.filter(m => /NPFL/.test(m.Competition));
-    if (filter === "fav") list = list.filter(m => favs.has("team:" + m.home_slug) || favs.has("team:" + m.away_slug) || favs.has("comp:" + m.league_slug));
+    if (filter === "fav") list = list.filter(m => favs.has("match:" + m.slug) || favs.has("team:" + m.home_slug) || favs.has("team:" + m.away_slug) || favs.has("comp:" + m.league_slug));
     const groups = {};
     list.sort((a, b) => (a.kickoff || "").localeCompare(b.kickoff || "")).forEach(m => (groups[m.Competition] = groups[m.Competition] || []).push(m));
     const rank = c => (BIG.indexOf(c) + 1) || 99;
@@ -95,9 +128,9 @@
     const f = (k, l) => `<button class="chip ${filter === k ? "on" : ""}" data-go="#/day/${day}/${k}">${l}</button>`;
     app.innerHTML = `<h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} match${list.length === 1 ? "" : "es"}.</p>
       <div class="tabs" role="tablist">${days.map(d => `<button class="${d === day ? "on" : ""}" data-go="#/day/${d}/${filter}">${esc(dayLabel(d))}</button>`).join("")}</div>
-      <div class="tabs">${f("all", "All")}${f("big", "Big games")}${f("europe", "Europe")}${f("nigeria", "Nigeria")}${f("fav", "★ Favourites")}</div>
-      ${order.length ? order.map(c => `<section class="group"><h3><span>${esc(c)}</span><span>${groups[c].length}</span></h3>${groups[c].map(matchRow).join("")}</section>`).join("")
-        : empty(filter === "fav" ? "None of your favourites play on this day. Tap ★ next to a match to follow a team." : "No matches for this filter on this day.")}
+      <div class="tabs">${f("all", "All")}${f("live", `● Live${Object.values(LIVE).some(x => x.state === "in") ? ` (${ms.filter(m => (LIVE[m.slug] || {}).state === "in").length})` : ""}`)}${f("big", "Big games")}${f("europe", "Europe")}${f("nigeria", "Nigeria")}${f("fav", "★ Favourites")}</div>
+      ${order.length ? order.map(c => compCard("day:" + c, c, REGION[c], groups[c].length, groups[c].map(matchRow).join(""), false)).join("")
+        : empty(filter === "fav" ? "None of your favourites play on this day. Tap ★ on a match, or on a team in its match page." : filter === "live" ? "No matches in play right now." : "No matches for this filter on this day.")}
       <p class="small muted">Updated ${idx.meta && idx.meta.updated ? esc(new Date(idx.meta.updated).toLocaleString()) : "recently"}. Chances are the model's; fair odds are the break-even price.</p>`;
   }
 
@@ -106,9 +139,22 @@
     const comps = await get("competitions.json");
     const groups = {};
     comps.forEach(c => (groups[c.group_name || "Other"] = groups[c.group_name || "Other"] || []).push(c));
-    app.innerHTML = `<h1>Leagues</h1><p><a href="#/leaders">Player leaders by competition</a></p>` + Object.entries(groups).map(([g, cs]) => `<section class="group"><h3><span>${esc(g)}</span></h3>
-      <ul class="list">${cs.map(c => `<li><a href="#/comp/${esc(c.slug)}">${esc(c.name)}</a> <button class="star ${fav.has("comp:" + c.slug) ? "on" : ""}" data-fav="comp:${esc(c.slug)}" aria-label="Favourite ${esc(c.name)}">★</button>
-        <span class="small muted">${c.upcoming ? `${c.upcoming} upcoming` : ""}</span></li>`).join("")}</ul></section>`).join("");
+    app.innerHTML = `<h1>Leagues</h1><p><a href="#/leaders">Player leaders by competition</a></p>` + Object.entries(groups).map(([g, cs]) => `<h2 class="grp">${esc(g)}</h2>
+      ${cs.map(c => compCard("lg:" + c.slug, c.name, REGION[c.name], c.upcoming || null, `<div class="lg-body" data-lg="${esc(c.slug)}"><p class="muted small">Loading…</p></div>`, true)).join("")}`).join("");
+    document.querySelectorAll ? setTimeout(() => shell.querySelectorAll(".card:not(.folded) [data-lg]").forEach(fillLeague), 0) : 0;
+  }
+  async function fillLeague(el) {                                    // next matchday, top of the table, and links, inside the card
+    if (el.dataset.done) return; el.dataset.done = "1";
+    const slug = el.dataset.lg;
+    let c; try { c = await get(`comp/${slug}.json`); } catch (e) { el.innerHTML = empty("Not available yet."); return; }
+    const r = (c.rounds || []).find(x => x.round === c.current_round) || (c.rounds || []).slice(-1)[0];
+    const fx = r ? r.matches.slice(0, 10).map(m => `<li class="num small">${esc(m.date)}: <a href="#/team/${esc(m.home_slug)}">${esc(m.home)}</a> ${m.played ? `<b>${esc(m.score)}</b>` : "v"}
+        <a href="#/team/${esc(m.away_slug)}">${esc(m.away)}</a>${m.slug ? ` <a href="#/match/${esc(m.slug)}">Prediction</a>` : ""}</li>`).join("") : "";
+    const tb = (c.table || []).slice(0, 5).map(x => `<tr><td class="num">${x.pos}</td><td><a href="#/team/${esc(x.team_slug)}">${esc(x.team)}</a></td><td class="r num">${x.P}</td><td class="r num"><b>${x.Pts}</b></td></tr>`).join("");
+    el.innerHTML = `${r ? `<h3>Matchday ${r.round}</h3><ul class="list">${fx}</ul>` : ""}
+      ${tb ? `<h3>Table</h3><div class="wrap"><table><thead><tr><th>#</th><th>Team</th><th class="r">P</th><th class="r">Pts</th></tr></thead><tbody>${tb}</tbody></table></div>` : ""}
+      <p class="links"><a href="#/comp/${esc(slug)}/table">Full table</a> <a href="#/comp/${esc(slug)}/matches">All matchdays</a> <a href="#/comp/${esc(slug)}/leaders">Leaders</a>
+        <button class="star ${fav.has("comp:" + slug) ? "on" : ""}" data-fav="comp:${esc(slug)}" aria-label="Favourite ${esc(c.name)}">★</button></p>`;
   }
 
   async function pageComp(slug, tab, round) {
@@ -187,6 +233,9 @@
   async function pageMatch(slug) {
     setNav("today");
     const d = await get(`match/${slug}.json`);
+    await getLive();
+    const ts_ = d.team_style || {}, mm_ = d.match || {};
+    const mb_ = { badges: { home: { c: (ts_[mm_.Home] || {}).color, a: (ts_[mm_.Home] || {}).abbr }, away: { c: (ts_[mm_.Away] || {}).color, a: (ts_[mm_.Away] || {}).abbr } } };
     const m = d.match || {}, v = d.verdict || {};
     const H = m.Home, A = m.Away;
     const hs = m.home_slug || "", as = m.away_slug || "";
@@ -201,13 +250,21 @@
     const xi = ((((d.expected_xi || {}).home) || {}).ours || []).length;
     const confirmed = !!(((d.expected_xi || {}).home) || {}).confirmed;
     app.innerHTML = `<section class="hero big">
-        <p class="meta">${esc(m.Competition)}, ${esc(longDate(m.Date))}${m.kickoff ? `, ${esc(timeOf(m))}` : ""}</p>
-        <h1>${esc(H)} v ${esc(A)}</h1>
+        <p class="meta">${esc(m.Competition)}</p>
+        <p class="follow-row"><button class="btn follow ${fav.has("match:" + slug) ? "added" : ""}" data-fav="match:${esc(slug)}" data-follow-match="${esc(slug)}">☆ Follow this match</button></p>
+        <div class="mhead">
+          <button class="star ${fav.has("team:" + hs) ? "on" : ""}" data-fav="team:${esc(hs)}" aria-label="Favourite ${esc(H)}">★</button>
+          <div class="mside">${badge(Object.assign({}, m, mb_), "home")}<b>${esc(H)}</b></div>
+          <div class="mcentre num" id="mcentre">${(() => { const L = LIVE[slug]; return L && L.state !== "pre" ? `<b class="score">${L.hs}–${L.as}</b><span class="${L.state === "in" ? "live" : "muted"}">${esc(L.detail || "")}</span>`
+              : `<b class="score">${esc(timeOf(m))}</b><span class="muted">${esc(dayLabel(String(m.Date).slice(0, 10)))}</span>`; })()}</div>
+          <div class="mside">${badge(Object.assign({}, m, mb_), "away")}<b>${esc(A)}</b></div>
+          <button class="star ${fav.has("team:" + as) ? "on" : ""}" data-fav="team:${esc(as)}" aria-label="Favourite ${esc(A)}">★</button>
+        </div>
         ${chanceBar(m, [H, A])}
         <div class="bar-legend num"><span><b>${pct(m.pH)}</b>${esc(H)}, fair ${odds(fairOf(m.pH))}</span><span><b>${pct(m.pD)}</b>Draw, fair ${odds(fairOf(m.pD))}</span>
           <span style="text-align:right"><b>${pct(m.pA)}</b>${esc(A)}, fair ${odds(fairOf(m.pA))}</span></div>
         ${m.ExpHome != null ? `<p class="muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}.</p>` : ""}
-        <p>${hs ? alertsLink(hs, `Get alerts for ${H}`) : ""} ${as ? alertsLink(as, `Get alerts for ${A}`) : ""}</p>
+
       </section>
       ${v.best && v.best.length ? `<section class="section"><h2>Verdict</h2><ul class="list">${v.best.map(b => `<li class="angle"><span><b>${esc(b.Bet)}</b><br><span class="small muted">Fair odds ${odds(b.fair)}</span></span>
           <span class="side"><span class="p num">${pct(b.p)}</span>${accaBtn(sel(b.Bet, b.p, b.fair))}</span><span class="why">${esc((b.reasons || []).join(" ") || b.evidence || "")}</span></li>`).join("")}
@@ -320,8 +377,9 @@
     if (!favs.length) { app.innerHTML = `<h1>Favourites</h1>` + empty("Tap ★ next to a team or league to keep it here. Favourites are saved in this browser only."); return; }
     const idx = await get("index.json");
     const set = new Set(favs);
-    const list = (idx.matches || []).filter(m => set.has("team:" + m.home_slug) || set.has("team:" + m.away_slug) || set.has("comp:" + m.league_slug));
-    app.innerHTML = `<h1>Favourites</h1><p class="small muted">${favs.map(f => `<a href="#/${f.startsWith("team:") ? "team" : "comp"}/${esc(f.split(":")[1])}">${esc(f.split(":")[1].replace(/-/g, " "))}</a>`).join(", ")}</p>
+    await getLive();
+    const list = (idx.matches || []).filter(m => set.has("match:" + m.slug) || set.has("team:" + m.home_slug) || set.has("team:" + m.away_slug) || set.has("comp:" + m.league_slug));
+    app.innerHTML = `<h1>Favourites</h1><p class="small muted">${favs.filter(f => !f.startsWith("match:")).map(f => `<a href="#/${f.startsWith("team:") ? "team" : "comp"}/${esc(f.split(":")[1])}">${esc(f.split(":")[1].replace(/-/g, " "))}</a>`).join(", ")}</p>
       ${list.length ? list.map(matchRow).join("") : empty("No upcoming matches for your favourites in the next few days.")}`;
   }
 
@@ -352,11 +410,11 @@
   };
 
   // ---------- router
-  async function route() {
+  async function route(keepScroll) {
     const my = ++routeSeq;
     app = document.createElement("div");
     const parts = (location.hash.replace(/^#\/?/, "") || "").split("/").map(decodeURIComponent);
-    try { window.scrollTo(0, 0); } catch (e) {}
+    if (!keepScroll) try { window.scrollTo(0, 0); } catch (e) {}
     try {
       switch (parts[0]) {
         case "": await pageToday(); break;
@@ -391,10 +449,23 @@
       store.set("leaders_sort2:" + slug, [k, mode, cur && cur[0] === k && cur[1] === mode ? -cur[2] : -1]);
       hit("leaders_sort"); route(); return;
     }
-    const el = ev.target.closest("[data-go],[data-fav],[data-acca],[data-acca-clear]");
+    const el = ev.target.closest("[data-go],[data-fav],[data-acca],[data-acca-clear],[data-fold]");
     if (!el) return;
     if (el.dataset.go) { location.hash = el.dataset.go; return; }
     ev.preventDefault(); ev.stopPropagation();
+    if (el.dataset.followMatch) {
+      const was = fav.has("match:" + el.dataset.followMatch);
+      if (!was) fav.toggle("match:" + el.dataset.followMatch);
+      el.classList.add("added"); el.textContent = "★ Following this match";
+      if (C.bot) window.open(tg(C.bot + "?start=match_" + encodeURIComponent(el.dataset.followMatch)), "_blank", "noopener");
+      return;
+    }
+    if (el.dataset.fold) {                                           // fold or unfold a competition card (remembered)
+      const card = el.closest(".card"), isF = !card.classList.contains("folded");
+      card.classList.toggle("folded", isF); el.setAttribute("aria-expanded", String(!isF)); store.set("fold:" + el.dataset.fold, isF);
+      if (!isF) card.querySelectorAll("[data-lg]").forEach(fillLeague);
+      return;
+    }
     if (el.dataset.fav) { fav.toggle(el.dataset.fav); const on = fav.has(el.dataset.fav);
       document.querySelectorAll(`[data-fav="${CSS.escape(el.dataset.fav)}"]`).forEach(s => s.classList.toggle("on", on)); return; }
     if (el.hasAttribute("data-acca-clear")) { acca.clear(); route(); return; }
@@ -420,6 +491,12 @@
     document.head.appendChild(s);
   }
   window.addEventListener("hashchange", route);
+  setInterval(async () => {
+    const h = location.hash || "#/";
+    if (!(h === "#/" || h.startsWith("#/day/") || h.startsWith("#/fav") || h.startsWith("#/match/")) || document.hidden) return;
+    const before = JSON.stringify(LIVE); await getLive(true);
+    if (JSON.stringify(LIVE) !== before) { const y = window.scrollY; await route(true); try { window.scrollTo(0, y); } catch (e) {} }
+  }, 60000);
   showAccaCount();
   route();
 })();

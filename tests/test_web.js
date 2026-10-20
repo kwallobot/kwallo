@@ -43,4 +43,5 @@ const pick = (dir) => { const fs_ = fs.readdirSync(path.join(SITE, dir)); return
   w.location.hash = "#/fav"; await sleep(60);
   console.log("favourites page shows:", w.document.querySelectorAll("#app .match").length, "match(es)");
   console.log("errors:", errors.length ? errors : "none");
+  process.exit(0);
 })();

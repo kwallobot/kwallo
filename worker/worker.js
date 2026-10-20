@@ -77,6 +77,17 @@ async function handleUpdate(env, u) {
     return reply(env, chat, `📈 Your dashboard (latest run): ${env.ORIGIN || ""}/admin/dashboard\nUse any username and your DASHBOARD_PASSWORD.`);
   }
   if (cmd === "/start") {
+    const mm = arg.match(/^match_(.+)$/);                         // v33: one match only (alerts until full-time)
+    if (mm) {
+      const obj = await env.DATA.get("site/schedule.json");
+      const hit = obj ? (await obj.json()).find(x => x.slug === mm[1]) : null;
+      if (!hit) return reply(env, chat, "That match isn't in the schedule any more. Try /follow with a team name instead.");
+      await env.DB.prepare("INSERT OR IGNORE INTO subs (chat_id, kind, slug, name, created) VALUES (?, 'match', ?, ?, ?)")
+        .bind(chat, hit.slug, `${hit.home} v ${hit.away}`, new Date().toISOString()).run();
+      await env.DB.prepare("INSERT OR IGNORE INTO prefs (chat_id) VALUES (?)").bind(chat).run();
+      const ko = hit.kickoff ? new Date(hit.kickoff).toUTCString().slice(0, 22) + " UTC" : hit.date;
+      return reply(env, chat, `✅ Following <b>${esc(hit.home)} v ${esc(hit.away)}</b> (${esc(hit.competition)}, ${esc(ko)}). You'll get the lineups, kick-off, goals, cards, half-time and full-time for this match only; it's removed from your list after full-time.\n\n${HELP}`);
+    }
     const m = arg.match(/^(team|league)_(.+)$/);
     if (m) {
       const dir = await directory(env);
@@ -279,7 +290,8 @@ async function liveTick(env, now = Date.now()) {
     const subs = (await env.DB.prepare("SELECT chat_id, kind, slug FROM subs").all()).results || [];
     const by = {};
     for (const s of subs) (by[`${s.kind}:${s.slug}`] = by[`${s.kind}:${s.slug}`] || []).push(s.chat_id);
-    const watched = live.map(m => ({ m, fans: [...new Set([...(by[`team:${m.home_slug}`] || []), ...(by[`team:${m.away_slug}`] || []), ...(by[`league:${m.league_slug}`] || [])])] }))
+    const watched = live.map(m => ({ m, fans: [...new Set([...(by[`team:${m.home_slug}`] || []), ...(by[`team:${m.away_slug}`] || []), ...(by[`league:${m.league_slug}`] || []),
+                                                             ...(by[`match:${m.slug}`] || [])])] }))
                         .filter(x => x.fans.length);
     const boards = {};
     for (const code of [...new Set(watched.map(x => x.m.espn.code))].slice(0, 12)) {
@@ -329,8 +341,32 @@ async function liveTick(env, now = Date.now()) {
     }
     if (rows.length) await env.DB.batch(rows);
   }
+  const stale = sched.filter(m => m.kickoff && now - Date.parse(m.kickoff) > 24 * 3600000).map(m => m.slug);
+  if (new Date(now).getUTCMinutes() === 7 && stale.length)          // once an hour: tidy finished single-match follows
+    await env.DB.batch(stale.slice(0, 40).map(s => env.DB.prepare("DELETE FROM subs WHERE kind = 'match' AND slug = ?").bind(s)));
   const sent = await flushOutbox(env);
   return `live: ${live.length} in progress, ${queued} queued, ${sent} sent`;
+}
+async function liveScores(env, now = Date.now()) {
+  // matches that kicked off in the last 2.5 hours, or finished earlier today: { slug: {state, detail, hs, as} }
+  const obj = await env.DATA.get("site/schedule.json");
+  if (!obj) return {};
+  const sched = await obj.json();
+  const today = new Date(now).toISOString().slice(0, 10);
+  const due = sched.filter(m => m.espn && m.kickoff && Date.parse(m.kickoff) <= now + 5 * 60000 && (now - Date.parse(m.kickoff) < 150 * 60000 || m.kickoff.slice(0, 10) === today));
+  const out = {};
+  for (const code of [...new Set(due.map(m => m.espn.code))].slice(0, 25)) {
+    let board = null;
+    try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${code}/scoreboard`, { headers: { "user-agent": "Mozilla/5.0" } }); board = r.ok ? await r.json() : null; } catch (e) {}
+    for (const m of due.filter(x => x.espn.code === code)) {
+      const ev = ((board || {}).events || []).find(e => String(e.id) === String(m.espn.id));
+      if (!ev) continue;
+      const s = snapshot(ev);
+      if (s.state === "pre") continue;
+      out[m.slug] = { state: s.state, detail: s.state === "post" ? "FT" : (/HALFTIME/i.test(s.name) ? "HT" : (s.detail || "")), hs: s.hs, as: s.as };
+    }
+  }
+  return out;
 }
 async function flushOutbox(env, max = 30) {                 // sends up to 30 a minute (well inside the free plan's limits)
   const q = (await env.DB.prepare("SELECT id, chat_id, text FROM outbox ORDER BY id LIMIT ?").bind(max).all()).results || [];
@@ -424,6 +460,15 @@ export default {
       return new Response("ok");
     }
     // v32: the website's data (public files written by the pipeline), cached at the edge for 2 minutes
+    if (url.pathname === "/api/live") {                               // v33: live and finished scores for the website
+      const cacheKey = new Request("https://kwallo-cache/api/live");
+      const cached = await caches.default.match(cacheKey);
+      if (cached) return cached;
+      const out = await liveScores(env);
+      const res = new Response(JSON.stringify(out), { headers: { "content-type": "application/json", "access-control-allow-origin": "*", "cache-control": "public, max-age=60" } });
+      ctx.waitUntil(caches.default.put(cacheKey, res.clone()));
+      return res;
+    }
     if (url.pathname.startsWith("/api/site/")) {
       const rel = url.pathname.slice("/api/site/".length);
       if (!/^[a-z0-9][a-z0-9\-\/_.]*\.json$/.test(rel) || rel.includes("..")) return new Response("not found", { status: 404, headers: CORS });
@@ -461,4 +506,4 @@ export default {
     if (minute % 15 === 0) ctx.waitUntil(maybeDispatch(env).then(r => console.log("lineup check:", r)));
   },
 };
-export { findAssist, handleUpdate, maybeDispatch, subscribers, search, liveTick, snapshot, liveMessages, pressureCheck, flushOutbox, adminStats };
+export { liveScores, findAssist, handleUpdate, maybeDispatch, subscribers, search, liveTick, snapshot, liveMessages, pressureCheck, flushOutbox, adminStats };

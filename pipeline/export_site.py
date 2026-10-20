@@ -76,10 +76,12 @@ def export(ns, data_dir, mode):
                                                "ExpCards", "ExpCardsH", "ExpCardsA", "pOverCards", "ExpCorners", "pOverCorners", "Note", "Absent", "Grid"]},
                      "slug": ms, "kickoff": kick.get(k), "league_slug": slug(k[0]), "home_slug": slug(k[2]), "away_slug": slug(k[3]),
                      "espn": dict(zip(["code", "id"], espn_ids[k])) if k in espn_ids else None,
+                     "badges": {s_: {"c": ((P.get("team_style") or {}).get(t_) or {}).get("color"), "a": ((P.get("team_style") or {}).get(t_) or {}).get("abbr")}
+                                for s_, t_ in (("home", k[2]), ("away", k[3]))},          # v33: club colours and initials for the lists
                      "fair": {o: (1 / m[p] if m.get(p) else None) for o, p in [("H", "pH"), ("D", "pD"), ("A", "pA")]},
                      "top_pick": (v.get("best") or [None])[0] if v else None,
                      "confirmed": {s: bool((xi.get(s) or {}).get("confirmed")) for s in ("home", "away")}})
-        matches.append({x: row.get(x) for x in ["slug", "Competition", "league_slug", "Date", "kickoff", "Home", "Away", "home_slug", "away_slug", "espn",
+        matches.append({x: row.get(x) for x in ["slug", "Competition", "league_slug", "Date", "kickoff", "Home", "Away", "home_slug", "away_slug", "espn", "badges",
                                             "pH", "pD", "pA", "fair", "pBTTS", "pOver25", "top_pick", "confirmed"]})
         details[ms] = clean({"match": row, "verdict": v, "markets": get("markets", k), "expected_xi": xi, "last_time": get("last_time", k),
                              "scorers": get("scorers", k), "trends": {"home": (P.get("trends") or {}).get(k[2]), "away": (P.get("trends") or {}).get(k[3])},

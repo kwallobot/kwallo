@@ -98,7 +98,7 @@ def send(ns, data_dir, mode):
     now = pd.Timestamp.now("UTC").tz_convert(None)
     n_sent = 0
     for m in idx["matches"]:
-        fans = by_target.get(("team", m["home_slug"]), set()) | by_target.get(("team", m["away_slug"]), set()) | by_target.get(("league", m["league_slug"]), set())
+        fans = by_target.get(("team", m["home_slug"]), set()) | by_target.get(("team", m["away_slug"]), set()) | by_target.get(("league", m["league_slug"]), set()) | by_target.get(("match", m["slug"]), set())   # v33: single-match follows
         if not fans:
             continue
         ko = pd.Timestamp(m["kickoff"]).tz_localize(None) if m.get("kickoff") else pd.Timestamp(m["Date"]) + pd.Timedelta(hours=15)
