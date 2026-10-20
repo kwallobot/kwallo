@@ -218,7 +218,8 @@ def _espn_players(ns, slug, skip_names):
         log = [{"date": str(r.date)[:10], "competition": r.league, "team": r.team, "started": bool(r.starter),
                 "stats": {k: getattr(r, k) for k in ESPN_STATS if k in g and pd.notna(getattr(r, k))}} for r in g.tail(10).iloc[::-1].itertuples()]
         players[ps] = {"slug": ps, "name": name, "team": last["team"], "team_slug": slug(last["team"]), "league": last["league"], "source": "ESPN",
-                       "position": last.get("pos"), "matches": int(len(g)), "minutes": int(mins), "stats": stats, "log": log}
+                       "position": last.get("pos"), "matches": int(len(g)), "minutes": int(mins), "stats": stats, "log": log,
+                       "espn_id": str(pid)}                                   # v35: for the transfer history
         by_league.setdefault(last["league"], []).append(ps)
     return players, by_league
 
@@ -239,10 +240,11 @@ def build(ns, data_dir, mode, write, slug, clean):
         up = [m for m in matches if m["Competition"] == comp]
         if not len(cur) and not up:
             continue
-        table = _table(cur) if len(cur) and comp not in CUPS else []
+        # v35: the European cups get their league-phase table too (_results keeps only league-phase matches for them)
+        table = _table(cur) if len(cur) else []
         for t in table:
             t["team_slug"] = slug(t["team"])
-        rounds, nxt = _rounds(cur, up, slug) if comp not in CUPS else ([{"round": None, "matches": [{"date": m["Date"][:10], "home": m["Home"], "away": m["Away"],
+        rounds, nxt = _rounds(cur, up, slug) if (comp not in CUPS or len(cur)) else ([{"round": None, "matches": [{"date": m["Date"][:10], "home": m["Home"], "away": m["Away"],
                                                                          "slug": m["slug"], "pH": m.get("pH"), "pD": m.get("pD"), "pA": m.get("pA"), "kickoff": m.get("kickoff"),
                                                                          "played": False, "home_slug": m["home_slug"], "away_slug": m["away_slug"]} for m in up]}], None)
         n_files += write(f"site/comp/{cs}.json", clean({"name": comp, "slug": cs, "group": cal_group(comp), "season": season_of.get(comp), "table": table,
@@ -267,6 +269,17 @@ def build(ns, data_dir, mode, write, slug, clean):
         by_league.setdefault(lg, []).extend(pss)
     for k, v in ESPN_STATS.items():
         labels.setdefault(k, {"label": v, "section": "Match stats (ESPN)", "order": 10000 + list(ESPN_STATS).index(k)})
+    # v35: ESPN's id for PitchAPI players too (matched by team and name in ESPN's lineups), so every player page can show transfers
+    lu_ = ns.get("lu")
+    if lu_ is not None and len(lu_):
+        tm_ = ns.get("team_map") or {}
+        code_to_ = {**(ns.get("ESPN_LEAGUES") or {}), **(ns.get("EURO_CODES") or {})}
+        nk_ = lambda s: re.sub(r"[^a-z]", "", __import__("unicodedata").normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower())
+        l2_ = lu_.drop_duplicates("player_id", keep="last")
+        by_tn_ = {(slug(tm_.get((code_to_.get(c), t), t)), nk_(n)): str(i) for c, t, n, i in zip(l2_["comp"], l2_["team"], l2_["player"], l2_["player_id"])}
+        for p in players.values():
+            if not p.get("espn_id"):
+                p["espn_id"] = by_tn_.get((p["team_slug"], nk_(p["name"])))
     for ps, p in players.items():
         n_files += write(f"site/player/{ps}.json", clean({**p, "labels": {k: labels.get(k) for k in p["stats"]}}))
     pa_to_ours = {}
@@ -283,7 +296,7 @@ def build(ns, data_dir, mode, write, slug, clean):
     # ---------- teams ----------
     team_players = {}
     for ps, p in players.items():
-        team_players.setdefault(p["team_slug"], []).append({"slug": ps, "name": p["name"], "matches": p["matches"], "minutes": p["minutes"],
+        team_players.setdefault(p["team_slug"], []).append({"slug": ps, "name": p["name"], "matches": p["matches"], "minutes": p["minutes"], "espn_id": p.get("espn_id"),
                                                             "rating": (p["stats"].get("rating_title") or p["stats"].get("rating") or {}).get("average")})
     P = ns.get("payload") or {}
     teams = {}

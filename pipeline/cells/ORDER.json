@@ -19,6 +19,7 @@
  "18_c6_predict_europe.py",
  "19_c7_save.py",
  "20_c8_sim.py",
+ "20b_c8k_news.py",
  "21_c8g_insights.py",
  "22_c8c_reports.py",
  "23_c8b_backtest.py",

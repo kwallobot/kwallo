@@ -168,3 +168,55 @@ tr.hl td { background: color-mix(in srgb, var(--brand) 14%, transparent); font-w
 .pitchfig .lines line, .pitchfig .lines circle, .pitchfig .lines rect { stroke: color-mix(in srgb, var(--ink) 35%, transparent); stroke-width: 1.5; }
 .pitchfig .pn { font: 600 10px var(--font); font-stretch: 80%; fill: var(--ink); }
 .pitchfig .pp { font: 700 9px var(--font); fill: #fff; }
+
+/* v35: back button, tappable rows and players, advised bets, team averages, past-match statistics */
+.backbar { margin: 0 0 .2rem; }
+.back { display: inline-flex; align-items: center; gap: .2rem; text-decoration: none; font-weight: 650; font-stretch: 85%; color: var(--muted);
+        padding: .3rem .7rem .3rem .5rem; border: 1px solid var(--line); border-radius: 999px; }
+.back:hover { color: var(--ink); border-color: var(--brand); }
+tr.click { cursor: pointer; } tr.click:hover td { background: color-mix(in srgb, var(--brand) 8%, transparent); }
+.pitchfig a { cursor: pointer; } .pitchfig a:hover circle { stroke: var(--warn); stroke-width: 2.5; }
+a.pl { text-decoration: none; } a.pl:hover { text-decoration: underline; }
+.avgline { display: block; margin-top: .25rem; color: var(--ink); font-size: .85rem; }
+table.avg small { font-size: .78rem; }
+.stat-grid.two { grid-template-columns: 1fr 1fr; gap: 0 1.2rem; }
+.stat-grid.two > div { display: block; border-bottom: 0; }
+@media (max-width: 560px) { .stat-grid.two { grid-template-columns: 1fr; } }
+details > summary { cursor: pointer; list-style: revert; }
+h2.inline { display: inline; margin: 0; }
+.bar.mini { height: 6px; margin: .25rem 0 0; }
+table.mstats td { border-bottom: 1px solid var(--line); }
+table.mstats td.c { text-align: center; color: var(--muted); font-size: .85rem; width: 55%; }
+h2[id] { scroll-margin-top: 70px; }
+
+/* v35: the scoreboard on a dark band with white scores, and the match stats card (in play and full-time) */
+:root { --st-h: #49C35A; --st-a: #7C80F5; --st-card: #1A1F24; --st-ink: #F2F4F5; --st-muted: #9AA3AA; --st-track: #2A3138; }
+.mhead { background: #0B201B; color: #fff; border-radius: 16px; padding: .9rem .4rem; }
+.mhead .mcentre .score, .mhead .mside b { color: #fff; }
+.mhead .mcentre .muted { color: #B9CEC5; }
+.mhead .star { color: #8FA89E; } .mhead .star.on { color: var(--warn); }
+.mt .msc, .mrow.is-live .msc { color: var(--ink); }
+@media (prefers-color-scheme: dark) { .mt .msc, .mrow.is-live .msc { color: #fff; } }
+.statscard { margin: .4rem 0 1rem; }
+.skeys { display: flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--muted); margin: 0 0 .6rem; }
+.skeys .dot { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; margin-left: .4rem; } .skeys .dot:first-child { margin-left: 0; }
+.dot.h { background: var(--st-h); } .dot.a { background: var(--st-a); }
+.pswitch { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--st-card); border-radius: 14px; padding: 4px; margin-bottom: .8rem; }
+.pswitch button { border: 0; background: transparent; color: var(--st-ink); font: 700 .9rem var(--font); font-stretch: 85%; letter-spacing: .03em; padding: .55rem 0; border-radius: 11px; cursor: pointer; }
+.pswitch button.on { background: #F2F4F5; color: #111; }
+.scard { background: var(--st-card); color: var(--st-ink); border-radius: 16px; padding: 1rem 1rem .4rem; margin-bottom: .8rem; }
+.scard h3 { text-align: center; font-size: 1.05rem; margin: 0 0 .9rem; color: var(--st-ink); }
+.srow { margin-bottom: 1rem; }
+.slab { display: flex; justify-content: space-between; align-items: center; gap: .6rem; margin-bottom: .45rem; }
+.slab span { text-align: center; flex: 1; font-size: .95rem; }
+.slab b { font-weight: 600; font-size: 1.02rem; min-width: 2.5rem; } .slab b:last-child { text-align: right; }
+.pill { flex: none !important; padding: .05rem .5rem; border-radius: 999px; font-weight: 700; font-size: .85rem; color: #111; }
+.pill.h { background: var(--st-h); } .pill.a { background: var(--st-a); color: #fff; }
+.pbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--st-track); }
+.pbar i { display: block; } .pbar .h { background: var(--st-h); } .pbar .a { background: var(--st-a); }
+.halves { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.half { height: 6px; border-radius: 3px; background: var(--st-track); display: flex; overflow: hidden; }
+.half.h { justify-content: flex-end; }                     /* home grows leftwards from the middle, away rightwards */
+.half i { display: block; height: 100%; border-radius: 3px; }
+.half.h i { background: color-mix(in srgb, var(--st-h) 45%, var(--st-track)); } .half.a i { background: color-mix(in srgb, var(--st-a) 45%, var(--st-track)); }
+.half.h.lead i { background: var(--st-h); } .half.a.lead i { background: var(--st-a); }

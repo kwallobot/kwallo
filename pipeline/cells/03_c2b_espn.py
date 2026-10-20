@@ -134,7 +134,8 @@ def update_lineups(minutes):
                         tbuf.append({"event_id": eid, "date": ev.get("date"), "comp": code, "team_id": str((tm_.get("team") or {}).get("id")),
                                      "team": (tm_.get("team") or {}).get("displayName"), "side": tm_.get("homeAway"),
                                      **{k_: st_.get(k_) for k_ in ["totalTackles", "effectiveTackles", "offsides", "interceptions", "possessionPct",
-                                                                   "totalShots", "shotsOnTarget", "wonCorners", "foulsCommitted", "totalPasses"]}})
+                                                                   "totalShots", "shotsOnTarget", "wonCorners", "foulsCommitted", "totalPasses",
+                                                                   "yellowCards", "redCards"]}})          # v35: cards too (European cups)
             if complete and m < this_month:
                 months_full.add(m)
             if out_of_time:
@@ -145,7 +146,11 @@ def update_lineups(minutes):
             pd.DataFrame(ebuf).to_csv(epath, mode="a", header=not os.path.exists(epath), index=False)
         if tbuf:
             tpath_ = f"{SAVE_DIR}/lineups/{code}_teamstats.csv"
-            pd.DataFrame(tbuf).to_csv(tpath_, mode="a", header=not os.path.exists(tpath_), index=False)
+            new_ = pd.DataFrame(tbuf)
+            if os.path.exists(tpath_) and list(pd.read_csv(tpath_, nrows=0).columns) != list(new_.columns):
+                pd.concat([pd.read_csv(tpath_, dtype=str), new_], ignore_index=True).to_csv(tpath_, index=False)   # v35: new columns
+            else:
+                new_.to_csv(tpath_, mode="a", header=not os.path.exists(tpath_), index=False)
         state.update({"done": sorted(done), "events_done": sorted(ev_done), "months_full": sorted(months_full)})
         json.dump(state, open(state_path, "w"))
         if out_of_time:

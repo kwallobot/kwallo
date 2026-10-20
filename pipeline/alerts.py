@@ -112,10 +112,13 @@ def send(ns, data_dir, mode):
             todo.append(("preview", preview_text))
         if any((m.get("confirmed") or {}).values()) and hours <= 3:
             todo.append(("lineups", lineups_text))
+        worker_sent = set((subs.get("lineups_sent") or {}).get(m["slug"], []))      # v35: the Worker sends lineups as soon as they're out
         for kind, make in todo:
             text = make(d, site)
             for chat in fans:
                 if not prefs.get(chat, {}).get(kind, 1):
+                    continue
+                if kind == "lineups" and chat in worker_sent:
                     continue
                 key = f"{kind}|{m['slug']}|{chat}"
                 if key in sent:

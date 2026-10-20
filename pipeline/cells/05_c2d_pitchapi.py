@@ -22,6 +22,7 @@ PA_XG_MORE = {"INT-2:Champions League": ("Champions League", 1), "INT-2:Europa L
               "SVK:1. liga": ("Other-pa-SVK", 2),
               "ENG:Championship": ("Championship", 3), "ESP:LaLiga2": ("Segunda Division", 3), "GER:2. Bundesliga": ("2. Bundesliga", 3),
               "ITA:Serie B": ("Serie B", 3), "FRA:Ligue 2": ("Ligue 2", 3), "ENG:League One": ("League One", 4), "ENG:League Two": ("League Two", 4)}                 # seasons named by calendar year ("2026")
+PA_CUP_TACTICS = {k_: v_ for k_, v_ in PA_XG_MORE.items() if v_[1] == 1}   # v35: every match statistic (throw-ins...) for the European cups too
 EXTRA_FIXTURES = pd.DataFrame(columns=["League", "Date", "HomeTeam", "AwayTeam"])
 PITCHAPI_RUN_MINUTES = 10      # time limit per run for the expected-goals download (newest matches first; resumes next run)
 PA_TACTIC_LEAGUES = {"Premier League": ("ENG", "Premier League"), "La Liga": ("ESP", "LaLiga"), "Bundesliga": ("GER", "Bundesliga"),
@@ -274,7 +275,7 @@ if PA_KEY:
         TAP = f"{SAVE_DIR}/pitchapi_tactics.csv"
         ptac = checked_read(TAP, text=("id", "f_home", "f_away", "stats", "pv"), name="pitchapi_tactics")
         have_t = set(ptac.loc[ptac.get("pv", pd.Series(dtype=str)).astype(str) == "2", "id"].astype(str)) if len(ptac) and "pv" in ptac else set()   # v23: re-fetch older rows
-        tac_leagues = [f"{c}:{n}" for c, n in list(PA_XG_LEAGUES.values()) + list(PA_TACTIC_LEAGUES.values())]
+        tac_leagues = [f"{c}:{n}" for c, n in list(PA_XG_LEAGUES.values()) + list(PA_TACTIC_LEAGUES.values())] + list(PA_CUP_TACTICS)   # v35: + European cups
         todo_t = pcache[pcache["league"].isin(tac_leagues) & (pcache["status"] == "finished") & ~pcache["id"].astype(str).isin(have_t)].sort_values("date", ascending=False)
         t1, got_t = time.time(), []
         for r_ in todo_t.itertuples():

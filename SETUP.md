@@ -142,3 +142,24 @@ Open `https://YOUR-WORKER-ADDRESS/admin/dashboard` (any username, your password)
 
 ### If the site's data address changes
 Edit `web/config.js` (the `api` line points to your Worker's address), upload it to GitHub, and Pages republishes.
+
+
+## v33 and v34: nothing to set up
+Upload the new files to GitHub and paste the new `worker/worker.js` into the Worker (as in v32, step 4). No new settings.
+
+
+## v35: faster alerts, team news, and the new website pages
+
+1. **Upload everything** in the `pitchlab` folder to your GitHub project (Add file → Upload files, including the `.github` folder). The website updates by itself.
+2. **The Worker:** Cloudflare → Workers & Pages → **pitchlab-bot** → **Edit code** → paste the new `worker/worker.js` → **Deploy**. The bot's database gets its new tables by itself.
+3. **Check the Worker's schedule:** Worker → Settings → **Trigger Events**: the cron must be **`* * * * *`** (every minute). If it still says `*/15 * * * *`, live alerts arrive up to 15 minutes late: change it.
+4. **Links in lineup alerts:** Worker → Settings → Variables and Secrets → add a **Text** variable `SITE_URL` = your site's address (e.g. `https://kwallo.pages.dev`).
+   **Full match statistics after full-time:** in the same place, add a **Secret** `PITCHAPI_KEY` = your PitchAPI key (the same one as in GitHub). Without it, the match stats card shows ESPN's figures only (no xG, big chances, halves or ratings).
+5. **Team news (optional, recommended):** this reads injury and press-conference news for the next 3 days' matches with Claude.
+   - Create an API key at **console.anthropic.com** (sign up, add a little credit, then API keys → Create key).
+   - GitHub → your project → Settings → Secrets and variables → Actions → **New repository secret**: `ANTHROPIC_API_KEY` = the key.
+   - Cost: it uses Claude Haiku 5.5, the cheapest model, and only re-reads a match when its news changes: expect a few cents a week.
+   - Without the key, everything else works as before (only Premier League injury flags, from Fantasy PL).
+6. **First run:** Actions → **Weekly full run** → Run workflow. It also fills in cards for earlier European matches (a few minutes each run until done).
+
+**If live alerts are still slow on busy evenings:** open Worker → **Logs** during a match. Lines like `live: 6 in progress, 120 queued, 40 sent` mean the free plan's per-minute request allowance is the limit; Workers Paid (about $5/month) lifts it.

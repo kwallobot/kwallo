@@ -66,6 +66,16 @@ def export(ns, data_dir, mode):
             c_ = inv_codes.get(getattr(r, "Competition", None))
             if c_:
                 espn_ids[(r.Competition, str(r.Date)[:10], r.HomeTeam, r.AwayTeam)] = (c_, str(r.event_id))
+    # v35: head-to-head, the two sides' last 8 meetings in any competition we hold (with ESPN's match id where known)
+    RES_ = ns.get("RES")
+    def h2h(h, a):
+        if RES_ is None or not len(RES_):
+            return []
+        d_ = RES_[((RES_["HomeTeam"] == h) & (RES_["AwayTeam"] == a)) | ((RES_["HomeTeam"] == a) & (RES_["AwayTeam"] == h))].tail(8).iloc[::-1]
+        pair_ = lambda r, x, y: f"{int(getattr(r, x))}-{int(getattr(r, y))}" if pd.notna(getattr(r, x, np.nan)) and pd.notna(getattr(r, y, np.nan)) else None
+        return [{"date": str(r.Date)[:10], "comp": r.Comp, "home": r.HomeTeam, "away": r.AwayTeam, "score": pair_(r, "FTHG", "FTAG"),
+                 "corners": pair_(r, "HC", "AC"), "cards": pair_(r, "HY", "AY"),
+                 "espn": r.espn if isinstance(getattr(r, "espn", None), str) and ":" in r.espn else None} for r in d_.itertuples()]
     matches, details, teams = [], {}, {}
     for m in P.get("predictions", []):
         k = (m["Competition"], str(m["Date"])[:10], m["Home"], m["Away"])
@@ -85,7 +95,7 @@ def export(ns, data_dir, mode):
                                             "pH", "pD", "pA", "fair", "pBTTS", "pOver25", "top_pick", "confirmed"]})
         details[ms] = clean({"match": row, "verdict": v, "markets": get("markets", k), "expected_xi": xi, "last_time": get("last_time", k),
                              "scorers": get("scorers", k), "trends": {"home": (P.get("trends") or {}).get(k[2]), "away": (P.get("trends") or {}).get(k[3])},
-                             "team_style": {t: (P.get("team_style") or {}).get(t) for t in (k[2], k[3])}})
+                             "team_style": {t: (P.get("team_style") or {}).get(t) for t in (k[2], k[3])}, "h2h": h2h(k[2], k[3])})
         for t in (k[2], k[3]):
             teams.setdefault(slug(t), {"slug": slug(t), "name": t, "league": k[0], "league_slug": slug(k[0])})
     idx_path = os.path.join(site_dir, "index.json")

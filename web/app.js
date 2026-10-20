@@ -1,4 +1,5 @@
-// Kwallo web app (v32). Reads the pipeline's public files through the Worker; no accounts, no cookies.
+// Kwallo web app (v32; v35: back button and swipes, advised bets against team averages, players / team stats / head-to-head tabs,
+// past-match pages, player links and transfer history). Reads the pipeline's public files through the Worker; no accounts, no cookies.
 (function () {
   "use strict";
   const C = window.KWALLO || {};
@@ -102,6 +103,52 @@
   function formChips(form) { return `<span class="form">${String(form || "").split("").filter(r => "WDL".includes(r)).map(r => `<b class="${r}">${r}</b>`).join("")}</span>`; }
   const empty = msg => `<p class="empty">${msg}</p>`;
   function setNav(name) { document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("on", a.dataset.nav === name)); }
+
+  // ---------- v35: the Worker's other endpoints (past matches, transfers), links to players, the back button, team averages
+  const workerApi = p => (C.api || "/api/site/").replace(/\/api\/site\/?$/, "/api/" + p);
+  async function getJSON(url) {
+    if (cache[url]) return cache[url];
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return (cache[url] = await r.json());
+  }
+  const nameKey = s => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z]/g, "");
+  const slugify = s => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const playerHref = (teamSlug, name, id) => `#/pf/${encodeURIComponent(teamSlug || "-")}/${encodeURIComponent(id || "-")}/${encodeURIComponent(name || "")}`;
+  const resultHref = e => `#/result/${encodeURIComponent(e)}`;
+  const backBar = () => `<p class="backbar"><a class="back" href="#/" aria-label="Back to today's matches">‹ Back</a></p>`;
+  const f1 = x => (x == null || !isFinite(x) ? "–" : Number(x).toFixed(1));
+  const AVG_ROWS = [["GF", "GA", "Goals"], ["xGF", "xGA", "Expected goals (xG)"], ["ShotsF", "ShotsA", "Shots"], ["SOTF", "SOTA", "Shots on target"],
+    ["CornersF", "CornersA", "Corners"], ["CardsF", "CardsA", "Cards (a red counts 2)"], ["FoulsF", "FoulsA", "Fouls"], ["TacklesF", "TacklesA", "Tackles"],
+    ["OffsidesF", "OffsidesA", "Offsides"], ["ThrowsF", "ThrowsA", "Throw-ins"]];
+  function avgTable(tr, H, A) {                                     // each side's averages: last 7 matches, this season in brackets
+    const sh = ((tr || {}).home || {}).stats || {}, sa = ((tr || {}).away || {}).stats || {};
+    const cell = (s, k) => `<td class="r num">${f1((s[k] || [])[0])}<small class="muted"> (${f1((s[k] || [])[1])})</small></td>`;
+    const rows = AVG_ROWS.filter(([kf]) => (sh[kf] || [])[0] != null || (sa[kf] || [])[0] != null);
+    if (!rows.length) return "";
+    return `<div class="wrap"><table class="avg"><thead><tr><th></th><th class="r" colspan="2">${esc(H)}</th><th class="r" colspan="2">${esc(A)}</th></tr>
+      <tr><th>Per match</th><th class="r">for</th><th class="r">against</th><th class="r">for</th><th class="r">against</th></tr></thead><tbody>
+      ${rows.map(([kf, ka, label]) => `<tr><td>${esc(label)}</td>${cell(sh, kf)}${cell(sh, ka)}${cell(sa, kf)}${cell(sa, ka)}</tr>`).join("")}</tbody></table></div>
+      <p class="small muted">Last 7 matches in every competition; this season's average in brackets.</p>`;
+  }
+  const STAT_OF = { corners: "Corners", cards: "Cards", shots: "Shots", sot: "SOT", fouls: "Fouls", tackles: "Tackles", offsides: "Offsides", throwins: "Throws", goals: "G" };
+  function statFamily(bet, family) {
+    if (family && STAT_OF[family]) return family;
+    const b = String(bet).toLowerCase();
+    if (/corner/.test(b)) return "corners"; if (/card/.test(b)) return "cards"; if (/throw/.test(b)) return "throwins"; if (/tackle/.test(b)) return "tackles";
+    if (/offside/.test(b)) return "offsides"; if (/foul/.test(b)) return "fouls"; if (/on target/.test(b)) return "sot"; if (/shot/.test(b)) return "shots";
+    if (/goal|score|both teams|over|under|clean sheet|nil/.test(b)) return "goals";
+    return null;
+  }
+  function avgLine(fam, tr, H, A) {                                  // "Arsenal 6.1 for, 3.9 against · Chelsea ..." for the market's own statistic
+    const p = STAT_OF[fam];
+    if (!p) return "";
+    const kf = p === "G" ? "GF" : p + "F", ka = p === "G" ? "GA" : p + "A";
+    const sh = ((tr || {}).home || {}).stats || {}, sa = ((tr || {}).away || {}).stats || {};
+    if ((sh[kf] || [])[0] == null && (sa[kf] || [])[0] == null) return "";
+    const lab = { corners: "corners", cards: "cards", shots: "shots", sot: "shots on target", fouls: "fouls", tackles: "tackles", offsides: "offsides", throwins: "throw-ins", goals: "goals" }[fam];
+    return `Last 7, ${lab} per match: ${esc(H)} ${f1((sh[kf] || [])[0])} for, ${f1((sh[ka] || [])[0])} against · ${esc(A)} ${f1((sa[kf] || [])[0])} for, ${f1((sa[ka] || [])[0])} against.`;
+  }
 
   // ---------- pages
   async function pageToday(day, filter) {
@@ -234,12 +281,50 @@
     ["timing", "Goal timing"], ["penalty", "Penalties"], ["throwins", "Throw-ins"], ["offsides", "Offsides"], ["tackles", "Tackles"], ["player_props", "Player props"]];
   const famName = f => (FAMILY.find(([k]) => k === f) || [f, String(f || "Other").replace(/_/g, " ").replace(/^./, c => c.toUpperCase())])[1];
   const famRank = f => { const i = FAMILY.findIndex(([k]) => k === f); return i < 0 ? 99 : i; };
-  const TABS = [["overview", "Overview"], ["verdict", "Verdict"], ["markets", "Markets"], ["lineups", "Lineups"], ["form", "Form"], ["table", "Table"]];
+  const TABS = [["overview", "Overview"], ["verdict", "Verdict"], ["markets", "Markets"], ["lineups", "Lineups"], ["players", "Players"],
+    ["teamstats", "Team stats"], ["h2h", "H2H"], ["form", "Form"], ["table", "Table"]];          // v35: players, team stats, head-to-head
+  function advisedBets(d, slug, sel, H, A) {                        // v35: the model's advised bets, each beside both teams' averages for its statistic
+    const v = d.verdict || {}, tr = d.trends || {}, seen = new Set(), out = [];
+    const add = (b, label) => { if (!b || !b.Bet || seen.has(b.Bet)) return; seen.add(b.Bet); out.push({ ...b, label }); };
+    (v.best || []).forEach(b => add(b, "Top angle"));
+    add(v.safer, "Safer angle");
+    (d.markets || []).filter(x => x.trusted && x.p >= 0.6).sort((a, b) => b.p - a.p).slice(0, 6)
+      .forEach(x => add({ Bet: String(x.Bet).replace(/\s*\(expected [\d.]+\)/, ""), p: x.p, fair: x.fair, family: x.family, ex: (String(x.Bet).match(/\(expected ([\d.]+)\)/) || [])[1] }, "Tested market"));
+    if (!out.length) return "";
+    return `<section class="section" data-tab="markets"><h2>Advised bets</h2><p class="small muted">The model's picks for this match, each against both teams' recent averages. Only worth taking above the fair odds.</p>
+      <ul class="list">${out.map(b => { const line = /player_props|first_scorer/.test(b.family || "") ? "" : avgLine(statFamily(b.Bet, b.family), tr, H, A);   // a player's bet: no team average
+        return `<li class="angle"><span><span class="tag">${esc(b.label)}</span> <b>${esc(b.Bet)}</b><br><span class="small muted">Fair odds ${odds(b.fair)}${b.ex ? `, expected ${esc(b.ex)}` : ""}</span></span>
+          <span class="side"><span class="p num">${pct(b.p)}</span>${accaBtn(sel(b.Bet, b.p, b.fair))}</span>
+          <span class="why">${esc((b.reasons || []).join(" ") || b.evidence || "")}${line ? `<span class="avgline">${line}</span>` : ""}</span></li>`; }).join("")}</ul></section>`;
+  }
+  function scorersBlock(S, H, A, hs, as) {                          // v35: likeliest scorers and assisters (as on the dashboard)
+    if (!S) return "";
+    const list = (arr, team, ts) => (arr || []).slice(0, 5).map(p => `<li><a href="${playerHref(ts, p.Player)}">${esc(p.Player)}</a> <span class="num">${pct(p.p)}</span></li>`).join("");
+    const block = (title, h, a) => (h || []).length || (a || []).length ? `<h3>${title}</h3><div class="stat-grid two"><div><b>${esc(H)}</b><ul class="list small">${list(h, H, hs)}</ul></div>
+      <div><b>${esc(A)}</b><ul class="list small">${list(a, A, as)}</ul></div></div>` : "";
+    const body = block("Likeliest scorers", S.home, S.away) + block("Likeliest assisters", S.home_assist, S.away_assist);
+    return body ? `<section class="section" data-tab="markets"><h2>Players to watch</h2>${body}<p class="small muted">Each player's chance to score or assist at least once.</p></section>` : "";
+  }
+  function h2hBlock(rows, H, A) {
+    if (!(rows || []).length) return "";
+    let w = 0, d = 0, l = 0, g = 0, n = 0;
+    rows.forEach(r => { const [x, y] = String(r.score || "").split("-").map(Number); if (!isFinite(x) || !isFinite(y)) return; n++; g += x + y;
+      const hg = r.home === H ? x : y, ag = r.home === H ? y : x; if (hg > ag) w++; else if (hg === ag) d++; else l++; });
+    return `<section class="section" data-tab="h2h"><h2>Head to head</h2>${n ? `<p><b>${esc(H)}</b> ${w} wins, ${d} draws, <b>${esc(A)}</b> ${l} wins in the last ${n} meetings; ${(g / n).toFixed(1)} goals a game.</p>` : ""}
+      <div class="wrap"><table><thead><tr><th>Date</th><th>Match</th><th class="r">Score</th><th class="r">Corners</th><th class="r">Cards</th></tr></thead><tbody>
+      ${rows.map(r => `<tr ${r.espn ? `class="click" data-go="${resultHref(r.espn)}"` : ""}><td class="num small">${esc(r.date)}</td><td>${esc(r.home)} v ${esc(r.away)} <span class="small muted">${esc(r.comp || "")}</span></td>
+        <td class="r num"><b>${esc(r.score || "–")}</b></td><td class="r num">${esc(r.corners || "–")}</td><td class="r num">${esc(r.cards || "–")}</td></tr>`).join("")}</tbody></table></div>
+      <p class="small muted">Tap a match for its full statistics.</p></section>`;
+  }
   async function pageMatch(slug, tab) {
-    tab = TABS.some(([k]) => k === tab) ? tab : "overview";
     setNav("today");
     const d = await get(`match/${slug}.json`);
     await getLive();
+    // v35: once the match has kicked off, a Stats tab (ESPN live, PitchAPI's full set after full-time), opened by default
+    const L0 = LIVE[slug], ev0 = (d.match || {}).espn;
+    const hasStats = !!(ev0 && ev0.code && ev0.id && L0 && L0.state && L0.state !== "pre");
+    const TABS_ = hasStats ? [TABS[0], ["stats", L0.state === "in" ? "● Stats" : "Stats"], ...TABS.slice(1)] : TABS;
+    tab = TABS_.some(([k]) => k === tab) ? tab : (hasStats ? "stats" : "overview");
     const ts_ = d.team_style || {}, mm_ = d.match || {};
     const mb_ = { badges: { home: { c: (ts_[mm_.Home] || {}).color, a: (ts_[mm_.Home] || {}).abbr }, away: { c: (ts_[mm_.Away] || {}).color, a: (ts_[mm_.Away] || {}).abbr } } };
     const m = d.match || {}, v = d.verdict || {};
@@ -255,7 +340,7 @@
         <span class="num small muted">${p.p != null && !e.confirmed ? pct(p.p) : ""}</span></li>`).join(""); };
     const xi = ((((d.expected_xi || {}).home) || {}).ours || []).length;
     const confirmed = !!(((d.expected_xi || {}).home) || {}).confirmed;
-    app.innerHTML = `<section class="hero big">
+    app.innerHTML = `${backBar()}<section class="hero big">
         <p class="meta">${esc(m.Competition)}</p>
         <p class="follow-row"><button class="btn follow ${fav.has("match:" + slug) ? "added" : ""}" data-fav="match:${esc(slug)}" data-follow-match="${esc(slug)}">☆ Follow this match</button></p>
         <div class="mhead">
@@ -272,7 +357,8 @@
         ${m.ExpHome != null ? `<p class="muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}.</p>` : ""}
 
       </section>
-      <nav class="mtabs" role="tablist">${TABS.map(([k, l]) => `<a role="tab" href="#/match/${esc(slug)}/${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</a>`).join("")}</nav>
+      <nav class="mtabs" role="tablist">${TABS_.map(([k, l]) => `<a role="tab" href="#/match/${esc(slug)}/${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</a>`).join("")}</nav>
+      ${hasStats ? `<section class="section" data-tab="stats"><div data-stats="${esc(ev0.code + ":" + ev0.id)}" data-live="${L0.state === "in" ? 1 : 0}"><p class="muted small">Loading the match statistics…</p></div></section>` : ""}
       <section class="section" data-tab="overview">
         ${m.ExpHome != null ? `<p>Expected goals: <b>${esc(H)} ${Number(m.ExpHome).toFixed(2)}</b>, <b>${esc(A)} ${Number(m.ExpAway).toFixed(2)}</b>.</p>` : ""}
         ${m.Grid ? (() => { const tot = m.Grid.flat().reduce((s, x) => s + x, 0) || 1, cs = []; m.Grid.forEach((r, i) => r.forEach((x, j) => cs.push([i, j, x / tot])));
@@ -288,8 +374,10 @@
         ${v.safer ? `<li class="angle"><span>Safer angle: <b>${esc(v.safer.Bet)}</b><br><span class="small muted">Fair odds ${odds(v.safer.fair)}</span></span>
           <span class="side"><span class="p num">${pct(v.safer.p)}</span>${accaBtn(sel(v.safer.Bet, v.safer.p, v.safer.fair))}</span></li>` : ""}</ul>
         ${(v.avoid || []).length ? `<p class="small"><b>Avoid:</b> ${v.avoid.map(esc).join(" ")}</p>` : ""}</section>` : ""}
-      ${m.Grid ? `<section class="section" data-tab="markets"><h2>Score grid</h2>${gridTable(m.Grid, H, A)}</section>
-        <section class="section" data-tab="markets"><h2>Goals markets</h2>${(() => { const gm = gridMarkets(m.Grid, H, A), g = {}; gm.forEach(([f, b, p]) => (g[f] = g[f] || []).push([b, p]));
+      ${advisedBets(d, slug, sel, H, A)}
+      ${avgTable(d.trends, H, A) ? `<section class="section" data-tab="markets"><h2>Team averages</h2>${avgTable(d.trends, H, A)}</section>` : ""}
+      ${scorersBlock(d.scorers, H, A, hs, as)}
+      ${m.Grid ? `<section class="section" data-tab="markets"><h2>Goals markets</h2>${(() => { const gm = gridMarkets(m.Grid, H, A), g = {}; gm.forEach(([f, b, p]) => (g[f] = g[f] || []).push([b, p]));
           return `<p class="small muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}, total ${(Number(m.ExpHome) + Number(m.ExpAway)).toFixed(2)}.</p>`
             + Object.entries(g).map(([f, xs]) => `<h3>${esc(f)}</h3><div class="wrap"><table><tbody>${xs.map(([b, p]) => `<tr><td>${esc(b)}</td><td class="r num">${pct(p)}</td><td class="r num">${odds(p > 0 ? 1 / p : null)}</td>
               <td class="r">${accaBtn(sel(`${f}: ${b}`, p, p > 0 ? 1 / p : null))}</td></tr>`).join("")}</tbody></table></div>`).join(""); })()}</section>` : ""}
@@ -306,10 +394,17 @@
                 <td class="r num">${pct(x.p)}</td><td class="r num">${odds(x.fair)}</td><td class="r">${accaBtn(sel(base, x.p, x.fair))}</td></tr>`
                 + (under ? `<tr><td>${esc(under)}</td><td class="r num">${pct(1 - x.p)}</td><td class="r num">${odds(x.p < 1 ? 1 / (1 - x.p) : null)}</td><td class="r">${accaBtn(sel(under, 1 - x.p, x.p < 1 ? 1 / (1 - x.p) : null))}</td></tr>` : ""); }).join("")}</tbody></table></div>`).join("")}
           <p class="small muted">Trusted markets have passed their calibration test; experimental ones are still being tested. "Under" lines are the other side of each market.</p></section>` : ""}
+      ${m.Grid ? `<section class="section" data-tab="markets"><details><summary><h2 class="inline">Score grid</h2></summary>${gridTable(m.Grid, H, A)}</details></section>` : ""}
+      <section class="section" data-tab="players"><h2>Players</h2><div class="stat-grid two">
+        <div data-team-players="${esc(hs)}" data-name="${esc(H)}"><p class="muted small">Loading…</p></div><div data-team-players="${esc(as)}" data-name="${esc(A)}"><p class="muted small">Loading…</p></div></div></section>
+      ${avgTable(d.trends, H, A) ? `<section class="section" data-tab="teamstats"><h2>Team stats</h2>${avgTable(d.trends, H, A)}
+        ${["home", "away"].map(s => { const t = (d.trends || {})[s]; return t ? `<p class="small"><b>${esc(s === "home" ? H : A)}</b>: ${t.ppg != null ? `${Number(t.ppg).toFixed(2)} points a game in the last 7` : ""}${t.home ? `, at home ${esc(t.home)}` : ""}${t.away ? `, away ${esc(t.away)}` : ""}${t.perf != null ? `; goals minus xG ${t.perf >= 0 ? "+" : ""}${Number(t.perf).toFixed(2)} a game` : ""}.</p>` : ""; }).join("")}</section>` : ""}
+      ${h2hBlock(d.h2h, H, A)}
       ${xi ? `<section class="section" data-tab="lineups"><h2>${confirmed ? "Lineups" : "Expected lineups"}</h2>
           <p class="small muted">${confirmed ? "Official lineups." : "Expected lineups: fainter players are less certain to start; the number is each player's start chance."}</p>
-          ${pitchSVG((d.expected_xi || {}).home, (d.expected_xi || {}).away, H, A, (mb_.badges.home || {}).c, (mb_.badges.away || {}).c)}<div class="stat-grid" style="grid-template-columns:1fr 1fr">
-          <div style="display:block"><h3>${esc(H)}</h3>${xiByPosition((d.expected_xi || {}).home)}</div><div style="display:block"><h3>${esc(A)}</h3>${xiByPosition((d.expected_xi || {}).away)}</div></div>
+          ${pitchSVG((d.expected_xi || {}).home, (d.expected_xi || {}).away, H, A, (mb_.badges.home || {}).c, (mb_.badges.away || {}).c, hs, as)}<div class="stat-grid" style="grid-template-columns:1fr 1fr">
+          <div style="display:block"><h3>${esc(H)}</h3>${xiByPosition((d.expected_xi || {}).home, hs)}</div><div style="display:block"><h3>${esc(A)}</h3>${xiByPosition((d.expected_xi || {}).away, as)}</div></div>
+          ${["home", "away"].map(s => { const e = (d.expected_xi || {})[s] || {}; return !e.confirmed && (e.doubts || []).length ? `<p class="small"><b>${esc(s === "home" ? H : A)}, doubts and absences:</b> ${e.doubts.map(esc).join(", ")}</p>` : ""; }).join("")}
           <p class="small muted">${confirmed ? "Official lineups." : "Percentages are each player's chance of starting."}</p></section>` : ""}
       ${(d.trends || {}).home || (d.trends || {}).away ? `<section class="section" data-tab="form"><h2>Last 7 matches</h2>${lastSeven((d.trends || {}).home, H)}${lastSeven((d.trends || {}).away, A)}</section>` : ""}
       ${d.last_time && (d.last_time.home || d.last_time.away) ? `<section class="section" data-tab="form"><h2>Last time out</h2>${["home", "away"].map(s => { const lt = d.last_time[s]; if (!lt || !(lt.picks || []).length) return "";
@@ -318,7 +413,25 @@
     const panes = [...app.querySelectorAll("[data-tab]")];
     panes.forEach(s => { if (s.dataset.tab !== tab) s.remove(); });
     if (!panes.some(s => s.dataset.tab === tab)) app.querySelector(".mtabs").insertAdjacentHTML("afterend",
-      empty({ verdict: "No verdict for this match yet.", lineups: "Expected lineups appear a few days before the match, and the official ones about an hour before kickoff.", form: "No recent matches on record.", markets: "No markets for this match yet." }[tab] || "Nothing here yet."));
+      empty({ verdict: "No verdict for this match yet.", lineups: "Expected lineups appear a few days before the match, and the official ones about an hour before kickoff.", form: "No recent matches on record.",
+              markets: "No markets for this match yet.", teamstats: "No match statistics on record for these teams yet.", h2h: "These teams haven't met in the matches we hold." }[tab] || "Nothing here yet."));
+    const stEl = app.querySelector("[data-stats]");
+    if (stEl) {                                                       // v35: fetched fresh each minute while the match is on
+      let R = null;
+      try { R = await getJSON(workerApi(`result?e=${encodeURIComponent(stEl.dataset.stats)}&m=${stEl.dataset.live === "1" ? Math.floor(Date.now() / 60000) : "ft"}`)); } catch (e) {}
+      stEl.innerHTML = R && R.card ? statsCard(R.card, H, A, stEl.dataset.live === "1") : empty("Statistics for this match aren't available yet.");
+    }
+    app.querySelectorAll("[data-team-players]").forEach(async el => {      // v35: each squad, most minutes first (player pages one tap away)
+      let t = null;
+      try { t = await get(`team/${el.dataset.teamPlayers}.json`); } catch (e) {}
+      const ps = ((t || {}).players || []).slice(0, 18);
+      const html = `<h3>${esc(el.dataset.name)}</h3>` + (ps.length ? `<div class="wrap"><table><thead><tr><th>Player</th><th class="r">Apps</th><th class="r">Mins</th><th class="r">Rating</th></tr></thead><tbody>
+        ${ps.map(p => `<tr><td><a href="#/player/${esc(p.slug)}${p.espn_id ? "/" + esc(p.espn_id) : ""}">${esc(p.name)}</a></td><td class="r num">${p.matches || 0}</td><td class="r num">${p.minutes || 0}</td>
+          <td class="r num">${p.rating ? Number(p.rating).toFixed(1) : "–"}</td></tr>`).join("")}</tbody></table></div>` : empty("No player statistics for this team yet."));
+      el.innerHTML = html;
+      const live = shell.querySelector(`[data-team-players="${CSS.escape(el.dataset.teamPlayers)}"]`);   // the page may already be on screen
+      if (live && live !== el) live.innerHTML = html;
+    });
     const tbl = app.querySelector("[data-match-table]");
     if (tbl) {
       try {
@@ -344,12 +457,47 @@
           home_slug: u.venue === "H" ? slug : "", pH: u.pH, pD: u.pD, pA: u.pA, Competition: u.competition })).join("")}` : ""}
       ${(t.form || []).length ? `<h2>Recent results</h2><ul class="list">${t.form.slice().reverse().map(f => `<li class="num">${esc(f.date)}: ${f.venue === "H" ? "v" : "at"} ${esc(f.opp)} <b>${esc(f.score)}</b> ${formChips(f.result)}</li>`).join("")}</ul>` : ""}
       ${spotted.length ? `<h2>Trends</h2><ul class="list">${spotted.map(s => `<li>${esc(s.pattern)}: ${s.count} of the last ${s.of}${s.base != null ? ` <span class="small muted">(league usually ${pct(s.base)})</span>` : ""}</li>`).join("")}</ul>` : ""}
+      ${(() => { const st = (t.trends || {}).stats || {}, rows = AVG_ROWS.filter(([kf]) => (st[kf] || [])[0] != null);          // v35: team stats
+          return rows.length ? `<h2>Team stats</h2><div class="wrap"><table class="avg"><thead><tr><th>Per match</th><th class="r">for</th><th class="r">against</th></tr></thead><tbody>
+            ${rows.map(([kf, ka, label]) => `<tr><td>${esc(label)}</td><td class="r num">${f1((st[kf] || [])[0])}<small class="muted"> (${f1((st[kf] || [])[1])})</small></td>
+              <td class="r num">${f1((st[ka] || [])[0])}<small class="muted"> (${f1((st[ka] || [])[1])})</small></td></tr>`).join("")}</tbody></table></div>
+            <p class="small muted">Last 7 matches in every competition; this season's average in brackets.</p>` : ""; })()}
       ${(t.players || []).length ? `<h2>Squad</h2><div class="wrap"><table><thead><tr><th>Player</th><th class="r">Matches</th><th class="r">Minutes</th><th class="r">Rating</th></tr></thead><tbody>
           ${t.players.map(p => `<tr><td><a href="#/player/${esc(p.slug)}">${esc(p.name)}</a></td><td class="r num">${p.matches || 0}</td><td class="r num">${p.minutes || 0}</td><td class="r num">${p.rating ? Number(p.rating).toFixed(1) : "–"}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
     hit("team");
   }
 
-  async function pagePlayer(slug) {
+  // v35: the match stats card (in play and full-time): All / 1st / 2nd, possession as one split bar with % pills, every other
+  // statistic as two half-bars growing from the middle (each side's share of the total; the side ahead brighter)
+  const leadNum = v => { const m = String(v == null ? "" : v).match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : NaN; };
+  function statsCard(card, H, A, live) {
+    const periods = (card && card.periods) || [];
+    if (!periods.length) return "";
+    const row = it => {
+      const h = leadNum(it.home), a = leadNum(it.away), tot = h + a;
+      if (/posses/i.test(`${it.key || ""} ${it.label || ""}`)) {          // (PitchAPI spells it "BallPossesion")
+        const hp = isFinite(h) ? h : 50;
+        return `<div class="srow poss"><div class="slab"><span class="pill h">${esc(String(it.home).replace(/%?$/, "%"))}</span><span>${esc(it.label)}</span><span class="pill a">${esc(String(it.away).replace(/%?$/, "%"))}</span></div>
+          <div class="pbar"><i class="h" style="flex-basis:${hp}%"></i><i class="a" style="flex-basis:${100 - hp}%"></i></div></div>`;
+      }
+      const sh = isFinite(tot) && tot > 0 ? 100 * h / tot : 0, sa = isFinite(tot) && tot > 0 ? 100 * a / tot : 0;
+      return `<div class="srow"><div class="slab"><b class="num">${esc(it.home)}</b><span>${esc(it.label)}</span><b class="num">${esc(it.away)}</b></div>
+        <div class="halves"><span class="half h ${h >= a ? "lead" : ""}"><i style="width:${sh.toFixed(1)}%"></i></span><span class="half a ${a >= h ? "lead" : ""}"><i style="width:${sa.toFixed(1)}%"></i></span></div></div>`;
+    };
+    const blocks = periods.map((p, i) => `<div class="pblock" data-pblock="${i}" ${i ? "hidden" : ""}>${p.groups.map(g => `<section class="scard"><h3>${esc(g.title)}</h3>${g.items.map(row).join("")}</section>`).join("")}</div>`).join("");
+    const sw = periods.length > 1 ? `<div class="pswitch" role="tablist">${periods.map((p, i) => `<button role="tab" data-period="${i}" class="${i ? "" : "on"}" aria-selected="${!i}">${esc(p.name.toUpperCase())}</button>`).join("")}</div>` : "";
+    const note = card.source === "pitchapi" ? "Full statistics after full-time." : live ? "Live statistics, updated every minute. The full set (xG, big chances, halves) appears after full-time." : "Full statistics (xG, big chances, halves) appear shortly after full-time.";
+    return `<div class="statscard"><p class="skeys"><span class="dot h"></span>${esc(H)}<span class="dot a"></span>${esc(A)}</p>${sw}${blocks}<p class="small muted">${note}</p></div>`;
+  }
+  // v35: headings for the player's statistics, recent matches and transfer history (from ESPN, through the Worker)
+  async function transfersBlock(id) {
+    if (!id || id === "-") return "";
+    let T = [];
+    try { T = await getJSON(workerApi(`transfers?id=${encodeURIComponent(id)}`)); } catch (e) { return ""; }
+    return `<h2 id="transfers">Transfer history</h2>${(T || []).length ? `<ul class="list">${T.map(t => `<li><span class="num">${esc(t.date)}</span>: ${esc(t.from || "?")} → <b>${esc(t.to || "?")}</b>
+        <span class="small muted">${esc([t.type, t.fee].filter(Boolean).join(", "))}</span></li>`).join("")}</ul>` : empty("No transfers on record.")}`;
+  }
+  async function pagePlayer(slug, espnId) {
     setNav("leagues");
     const p = await get(`player/${slug}.json`);
     const labels = p.labels || {};
@@ -357,15 +505,51 @@
     Object.entries(p.stats || {}).forEach(([k, v]) => { const l = labels[k] || { label: k, section: "Other" }; (sections[l.section || "Other"] = sections[l.section || "Other"] || []).push({ k, l, v }); });
     const val = v => (v && typeof v === "object" ? v : { total: v });
     const n1 = x => (x != null && isFinite(x) ? Math.round(x * 10) / 10 : "–"), n2 = x => (x != null && isFinite(x) ? Number(x).toFixed(2) : "–");
-    app.innerHTML = `<h1>${esc(p.name)}</h1>
+    const tb = await transfersBlock(p.espn_id || espnId);
+    app.innerHTML = `${backBar()}<h1>${esc(p.name)}</h1>
       <p class="muted"><a href="#/team/${esc(p.team_slug)}">${esc(p.team)}</a>${p.position ? `, ${esc(p.position)}` : ""}. ${p.matches || 0} matches, ${p.minutes || 0} minutes this season.</p>
-      ${Object.entries(sections).map(([s, xs]) => `<h2>${esc(s)}</h2><div class="wrap"><table><thead><tr><th>Statistic</th><th class="r">Total</th><th class="r">Per 90</th><th class="r">Per match</th></tr></thead><tbody>
+      <p class="links small"><a href="#/player/${esc(slug)}${espnId ? "/" + esc(espnId) : ""}" data-jump="stats">Player stats</a> <a href="#/player/${esc(slug)}" data-jump="recent">Recent matches</a>${tb ? ` <a href="#/player/${esc(slug)}" data-jump="transfers">Transfer history</a>` : ""}</p>
+      <h2 id="stats">Player stats</h2>
+      ${Object.keys(sections).length ? Object.entries(sections).map(([s, xs]) => `<h3>${esc(s)}</h3><div class="wrap"><table><thead><tr><th>Statistic</th><th class="r">Total</th><th class="r">Per 90</th><th class="r">Per match</th></tr></thead><tbody>
         ${xs.sort((a, b) => (a.l.order || 0) - (b.l.order || 0)).map(({ l, v }) => { const x = val(v); return `<tr><td>${esc(l.label || "")}</td><td class="r num">${n1(x.total)}</td>
-          <td class="r num">${n2(x.per90)}</td><td class="r num">${n2(x.per_match)}</td></tr>`; }).join("")}</tbody></table></div>`).join("")}
-      ${(p.log || []).length ? `<h2>Recent matches</h2><ul class="list">${p.log.slice().reverse().map(g => `<li class="num">${esc(g.date)}: ${esc(g.competition || "")} ${g.started ? "" : "(sub)"}
-          <span class="small muted">${Object.entries(g.stats || {}).slice(0, 6).map(([k, x]) => `${esc((labels[k] || {}).label || k)} ${esc(x)}`).join(", ")}</span></li>`).join("")}</ul>` : ""}
-      <p class="small muted">Source: ${esc(p.source === "pitchapi" ? "full match statistics" : "match reports")}.</p>`;
+          <td class="r num">${n2(x.per90)}</td><td class="r num">${n2(x.per_match)}</td></tr>`; }).join("")}</tbody></table></div>`).join("") : empty("No statistics this season yet.")}
+      <h2 id="recent">Recent matches</h2>${(p.log || []).length ? `<ul class="list">${p.log.slice().reverse().map(g => `<li class="num">${esc(g.date)}: ${esc(g.competition || "")} ${g.started === false ? "(sub)" : ""}
+          <span class="small muted">${Object.entries(g.stats || {}).slice(0, 6).map(([k, x]) => `${esc((labels[k] || {}).label || k)} ${esc(x)}`).join(", ")}</span></li>`).join("")}</ul>` : empty("No recent matches on record.")}
+      ${tb}
+      <p class="small muted">Source: ${esc(p.source === "pitchapi" ? "full match statistics" : "match reports")}${tb ? "; transfers from ESPN" : ""}.</p>`;
     hit("player");
+  }
+  // v35: a player tapped in a lineup or list: find his page from his club's squad (by ESPN id, then by name)
+  async function pageFindPlayer(teamSlug, id, name) {
+    setNav("leagues");
+    let t = null;
+    if (teamSlug && teamSlug !== "-") { try { t = await get(`team/${teamSlug}.json`); } catch (e) {} }
+    const ps = (t || {}).players || [], nk = nameKey(name), sur = nameKey(String(name || "").split(" ").slice(-1)[0]);
+    const hitP = ps.find(p => id && id !== "-" && String(p.espn_id) === String(id)) || ps.find(p => nameKey(p.name) === nk)
+      || (ps.filter(p => nameKey(String(p.name).split(" ").slice(-1)[0]) === sur).length === 1 ? ps.find(p => nameKey(String(p.name).split(" ").slice(-1)[0]) === sur) : null);
+    if (hitP) { app.innerHTML = `<p class="loading">Opening ${esc(hitP.name)}…</p>`; location.replace(`#/player/${hitP.slug}${id && id !== "-" ? "/" + id : ""}`); return; }
+    const tb = await transfersBlock(id);
+    app.innerHTML = `${backBar()}<h1>${esc(name || "Player")}</h1>${t ? `<p class="muted"><a href="#/team/${esc(teamSlug)}">${esc(t.name)}</a></p>` : ""}
+      ${empty("Detailed statistics aren't available for this player yet.")}${tb}`;
+  }
+  // v35: a past match: score, statistics, goals and cards, lineups (ESPN, through the Worker)
+  async function pageResult(e) {
+    setNav("today");
+    const R = await getJSON(workerApi(`result?e=${encodeURIComponent(e)}`));
+    const T = R.teams || [], H = T.find(t => t.side === "home") || T[0] || {}, A = T.find(t => t.side === "away") || T[1] || {};
+    const bar = s => { const h = parseFloat(s.home), a = parseFloat(s.away), tot = h + a;
+      return isFinite(h) && isFinite(a) && tot > 0 ? `<div class="bar mini" aria-hidden="true"><i class="h" style="flex-basis:${100 * h / tot}%"></i><i class="a" style="flex-basis:${100 * a / tot}%"></i></div>` : ""; };
+    app.innerHTML = `${backBar()}<section class="hero"><p class="meta">${esc(R.competition)}${R.date ? `, ${esc(longDate(R.date))}` : ""}${R.venue ? ` · ${esc(R.venue)}` : ""}</p>
+        <div class="mhead"><span></span><div class="mside"><b>${esc(H.name)}</b></div><div class="mcentre num"><b class="score">${esc(H.score ?? "–")}–${esc(A.score ?? "–")}</b>
+          <span class="muted">${esc(R.status || "")}</span></div><div class="mside"><b>${esc(A.name)}</b></div><span></span></div></section>
+      ${R.card ? `<h2>Match stats</h2>${statsCard(R.card, H.name, A.name, !R.completed)}`
+        : (R.stats || []).length ? `<h2>Match stats</h2><div class="wrap"><table class="mstats"><tbody>${R.stats.map(s => `<tr><td class="r num"><b>${esc(s.home)}</b></td><td class="c">${esc(s.label)}${bar(s)}</td><td class="num"><b>${esc(s.away)}</b></td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${(R.events || []).length ? `<h2>Goals and cards</h2><ul class="list">${R.events.filter(x => !/substitut/i.test(x.type)).map(x => `<li><span class="num">${esc(x.clock)}</span> ${/goal/i.test(x.type) ? "⚽" : /red/i.test(x.type) ? "🟥" : /yellow/i.test(x.type) ? "🟨" : "•"} ${esc(x.text || x.type)}
+          <span class="small muted">${esc(x.team)}</span></li>`).join("")}</ul>` : ""}
+      ${(R.lineups || []).length ? `<h2>Lineups</h2><div class="stat-grid two">${R.lineups.map(l => `<div style="display:block"><h3>${esc(l.team)}${l.formation ? ` <span class="small muted">${esc(l.formation)}</span>` : ""}</h3>
+          <ul class="list small">${(l.xi || []).map(p => `<li><a href="${playerHref(slugify(l.team), p.name, p.id)}">${esc(p.name)}</a> <span class="muted">${esc(p.pos)}</span></li>`).join("")}</ul></div>`).join("")}</div>` : ""}
+      <p class="small muted">Match data from ESPN.</p>`;
+    hit("result");
   }
 
   async function pageAngles() {
@@ -470,41 +654,45 @@
     const rows = t.rows.slice(-7).reverse();
     return `<h3>${esc(name)} ${formChips((t.form || "").slice(-7))}${t.ppg != null ? ` <span class="small muted">${Number(t.ppg).toFixed(2)} points per game</span>` : ""}</h3>
       <div class="wrap"><table><thead><tr><th>Date</th><th></th><th>Opponent</th><th class="r">Score</th><th class="r">xG</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td class="num small">${esc(String(r.Date).slice(5))}</td><td class="small muted">${r.Venue === "H" ? "home" : "away"}</td><td>${esc(r.Opponent)} <span class="small muted">${esc(r.Comp || "")}</span></td>
+      ${rows.map(r => `<tr ${r.espn ? `class="click" data-go="${resultHref(r.espn)}"` : ""}><td class="num small">${esc(String(r.Date).slice(5))}</td><td class="small muted">${r.Venue === "H" ? "home" : "away"}</td><td>${r.espn ? `<a href="${resultHref(r.espn)}">${esc(r.Opponent)}</a>` : esc(r.Opponent)} <span class="small muted">${esc(r.Comp || "")}</span></td>
         <td class="r num">${formChips(r.Result)} ${esc(r.Score)}</td><td class="r num small">${esc(r.xG || "–")}</td></tr>`).join("")}</tbody></table></div>
       ${rows.some(r => !r.xG) ? `<p class="small muted">xG shows "–" where no source covers that match (some cup and European ties, and leagues without xG data).</p>` : ""}
+      ${rows.some(r => r.espn) ? `<p class="small muted">Tap a match for its full statistics.</p>` : ""}
       ${(t.spotted || []).length ? `<ul class="list small">${t.spotted.slice(0, 5).map(s => `<li>${esc(typeof s === "string" ? s : (s.pattern ? `${s.pattern}: ${s.count} of the last ${s.of}${s.base != null ? `, league usually ${pct(s.base)}` : ""}` : JSON.stringify(s)))}</li>`).join("")}</ul>` : ""}`;
   }
   const POS = [["G", "Goalkeeper"], ["D", "Defenders"], ["M", "Midfielders"], ["F", "Forwards"]];
   // v34: the lineup on a pitch. Home in the bottom half, away in the top half; each line ordered left to right by position code
   const sideRank = pos => { const c = String(pos || "").toUpperCase().trim();      // wide left 0, left of centre 1, centre 2, right of centre 3, wide right 4
     if (/-L$/.test(c)) return 1; if (/-R$/.test(c)) return 3; if (/^L/.test(c)) return 0; if (/^R/.test(c)) return 4; return 2; };
-  function pitchSVG(home, away, H, A, cHome, cAway) {
+  // v35: the away side plays downwards from the top, so its left flank is on the right of the screen (mirrored);
+  //      every player links to his page
+  function pitchSVG(home, away, H, A, cHome, cAway, hs, as) {
     const W = 340, Hh = 520;
-    const lines = e => { const g = { G: [], D: [], M: [], F: [] };
+    const lines = (e, mirror) => { const g = { G: [], D: [], M: [], F: [] };
       ((e && e.ours) || []).forEach(p => { const k = p.Line || "M"; (g[k] || g.M).push(p); });
-      Object.values(g).forEach(arr => arr.sort((x, y) => sideRank(x.Pos) - sideRank(y.Pos))); return g; };
+      const rk = p => (mirror ? 4 - sideRank(p.Pos) : sideRank(p.Pos));
+      Object.values(g).forEach(arr => arr.sort((x, y) => rk(x) - rk(y))); return g; };
     const formation = g => [g.D.length, g.M.length, g.F.length].filter(n => n).join("-");
-    const dots = (g, top, color) => {
-      const rows = top ? ["G", "D", "M", "F"] : ["G", "D", "M", "F"];
+    const dots = (g, top, color, ts) => {
+      const rows = ["G", "D", "M", "F"];
       const yOf = { G: top ? 34 : Hh - 34, D: top ? 92 : Hh - 92, M: top ? 160 : Hh - 160, F: top ? 222 : Hh - 222 };
       return rows.map(k => g[k].map((p, i, arr) => { const x = (W / (arr.length + 1)) * (i + 1), y = yOf[k], op = p.p != null ? Math.max(0.35, Math.min(1, p.p)) : 1;
         const sur = String(p.Player || "").split(" ").slice(-1)[0];
-        return `<g opacity="${op.toFixed(2)}"><circle cx="${x.toFixed(1)}" cy="${y}" r="13" fill="${color}" stroke="#fff" stroke-width="1.5"/>
+        return `<a href="${playerHref(ts, p.Player, p.id)}" aria-label="${esc(p.Player)}"><g opacity="${op.toFixed(2)}"><circle cx="${x.toFixed(1)}" cy="${y}" r="13" fill="${color}" stroke="#fff" stroke-width="1.5"/>
           <text x="${x.toFixed(1)}" y="${y + 27}" text-anchor="middle" class="pn">${esc(sur.slice(0, 12))}</text>
-          ${p.p != null && p.p < 0.995 ? `<text x="${x.toFixed(1)}" y="${y + 4}" text-anchor="middle" class="pp">${Math.round(100 * p.p)}</text>` : ""}</g>`; }).join("")).join("");
+          ${p.p != null && p.p < 0.995 ? `<text x="${x.toFixed(1)}" y="${y + 4}" text-anchor="middle" class="pp">${Math.round(100 * p.p)}</text>` : ""}</g></a>`; }).join("")).join("");
     };
-    const gh = lines(home), ga = lines(away);
+    const gh = lines(home, false), ga = lines(away, true);
     return `<figure class="pitchfig"><figcaption class="small"><span><b>${esc(A)}</b> ${formation(ga) ? `(${formation(ga)})` : ""}</span></figcaption>
       <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Lineups on the pitch: ${esc(H)} ${formation(gh)}, ${esc(A)} ${formation(ga)}">
         <rect x="1" y="1" width="${W - 2}" height="${Hh - 2}" rx="10" class="turf"/>
         <g class="lines" fill="none"><line x1="1" y1="${Hh / 2}" x2="${W - 1}" y2="${Hh / 2}"/><circle cx="${W / 2}" cy="${Hh / 2}" r="42"/>
           <rect x="${W / 2 - 80}" y="1" width="160" height="62"/><rect x="${W / 2 - 80}" y="${Hh - 63}" width="160" height="62"/>
           <rect x="${W / 2 - 34}" y="1" width="68" height="22"/><rect x="${W / 2 - 34}" y="${Hh - 23}" width="68" height="22"/></g>
-        ${dots(ga, true, cAway || "#6F8F84")}${dots(gh, false, cHome || "#2E8F6A")}
+        ${dots(ga, true, cAway || "#6F8F84", as)}${dots(gh, false, cHome || "#2E8F6A", hs)}
       </svg><figcaption class="small"><span><b>${esc(H)}</b> ${formation(gh) ? `(${formation(gh)})` : ""}</span></figcaption></figure>`;
   }
-  function xiByPosition(e) {
+  function xiByPosition(e, ts) {
     const list = (e && e.ours) || [], groups = {};
     const lineOf = pos => { const b = String(pos || "").toUpperCase().trim().split("-")[0];
       if (["G", "GK"].includes(b)) return "G";
@@ -513,8 +701,8 @@
       if (["F", "FW", "S", "ST", "CF", "LF", "RF", "LW", "RW", "SS", "W"].includes(b)) return "F";
       return "GDMF".includes(b[0]) && b[0] ? b[0] : "M"; };
     list.forEach(p => { const k = p.Line || lineOf(p.Pos); (groups[k] = groups[k] || []).push(p); });
-    return POS.filter(([k]) => groups[k]).map(([k, lab]) => `<div class="pos"><span class="small muted">${lab}</span>${groups[k].map(p => `<span class="pl">${esc(p.Player)}${p.p != null && !e.confirmed ? ` <span class="num small muted">${pct(p.p)}</span>` : ""}</span>`).join("")}</div>`).join("")
-      + (Object.keys(groups).some(k => !POS.some(([x]) => x === k)) ? `<div class="pos"><span class="small muted">Other</span>${Object.entries(groups).filter(([k]) => !POS.some(([x]) => x === k)).flatMap(([, v]) => v).map(p => `<span class="pl">${esc(p.Player)}</span>`).join("")}</div>` : "");
+    return POS.filter(([k]) => groups[k]).map(([k, lab]) => `<div class="pos"><span class="small muted">${lab}</span>${groups[k].map(p => `<a class="pl" href="${playerHref(ts, p.Player, p.id)}">${esc(p.Player)}${p.p != null && !e.confirmed ? ` <span class="num small muted">${pct(p.p)}</span>` : ""}</a>`).join("")}</div>`).join("")
+      + (Object.keys(groups).some(k => !POS.some(([x]) => x === k)) ? `<div class="pos"><span class="small muted">Other</span>${Object.entries(groups).filter(([k]) => !POS.some(([x]) => x === k)).flatMap(([, v]) => v).map(p => `<a class="pl" href="${playerHref(ts, p.Player, p.id)}">${esc(p.Player)}</a>`).join("")}</div>` : "");
   }
 
   const TEXT = {
@@ -549,7 +737,9 @@
         case "leaders": await pageLeadersPicker(); break;
         case "match": await pageMatch(parts[1], parts[2]); break;
         case "team": await pageTeam(parts[1]); break;
-        case "player": await pagePlayer(parts[1]); break;
+        case "player": await pagePlayer(parts[1], parts[2]); break;
+        case "pf": await pageFindPlayer(parts[1], parts[2], parts[3]); break;          // v35
+        case "result": await pageResult(parts[1]); break;                              // v35
         case "angles": await pageAngles(); break;
         case "acca": pageAcca(); break;
         case "track": await pageTrack(); break;
@@ -567,6 +757,11 @@
 
   // ---------- one listener for every button
   document.addEventListener("click", ev => {
+    const per = ev.target.closest("[data-period]");                  // v35: All / 1st / 2nd on the stats card
+    if (per) { const card = per.closest(".statscard"); card.querySelectorAll("[data-period]").forEach(b => { const on = b === per; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); });
+      card.querySelectorAll("[data-pblock]").forEach(x => { x.hidden = x.dataset.pblock !== per.dataset.period; }); return; }
+    const jump = ev.target.closest("[data-jump]");                   // v35: in-page headings (player page)
+    if (jump) { ev.preventDefault(); const t = document.getElementById(jump.dataset.jump); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
     const th = ev.target.closest("th[data-sort]");
     if (th) {
       const [slug, k, mode] = th.dataset.sort.split("|");
@@ -615,6 +810,30 @@
     s.defer = true; s.src = "https://static.cloudflareinsights.com/beacon.min.js"; s.setAttribute("data-cf-beacon", JSON.stringify({ token: C.cfAnalyticsToken }));
     document.head.appendChild(s);
   }
+  // ---------- v35: swipes. From the middle of the screen: the next / previous match tab. From the screen's edge: back to today's matches.
+  // Tables that scroll sideways keep their own swipe. (On phones the browser's own edge-swipe "back" may come first.)
+  (function swipes() {
+    let sx = 0, sy = 0, st = 0, edge = false, ok = false;
+    const scrollsX = el => { for (; el && el !== document.body; el = el.parentElement) {
+      if (el.scrollWidth > el.clientWidth + 4 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return true; } return false; };
+    document.addEventListener("touchstart", e => {
+      if (e.touches.length !== 1) { ok = false; return; }
+      const t = e.touches[0]; sx = t.clientX; sy = t.clientY; st = Date.now();
+      edge = sx < 28 || sx > window.innerWidth - 28; ok = edge || !scrollsX(e.target);
+    }, { passive: true });
+    document.addEventListener("touchend", e => {
+      if (!ok) return; ok = false;
+      const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+      if (Date.now() - st > 700 || Math.abs(dx) < 70 || Math.abs(dx) < 1.6 * Math.abs(dy)) return;
+      const h = location.hash || "#/";
+      if (edge) { if (h !== "#/") { hit("swipe_home"); location.hash = "#/"; } return; }
+      const m = h.match(/^#\/match\/([^/]+)(?:\/([a-z]+))?/);
+      if (!m) return;
+      const tabs = [...shell.querySelectorAll(".mtabs a")].map(a => a.getAttribute("href"));
+      const cur = tabs.indexOf(`#/match/${m[1]}/${m[2] || "overview"}`), nx = cur + (dx < 0 ? 1 : -1);
+      if (cur >= 0 && nx >= 0 && nx < tabs.length) { hit("swipe_tab"); location.hash = tabs[nx]; }
+    }, { passive: true });
+  })();
   window.addEventListener("hashchange", route);
   setInterval(async () => {
     const h = location.hash || "#/";

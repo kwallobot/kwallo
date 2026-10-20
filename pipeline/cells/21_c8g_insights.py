@@ -203,6 +203,34 @@ RES["Date"] = pd.to_datetime(RES["Date"]).dt.normalize()
 for c_ in ["FTHG", "FTAG", "HS", "AS", "HST", "AST", "HC", "AC", "HY", "AY", "HR", "AR", "HF", "AF"]:
     RES[c_] = pd.to_numeric(RES.get(c_), errors="coerce")
 RES = RES[RES["Date"] < TODAY].drop_duplicates(["Date", "HomeTeam", "AwayTeam"]).sort_values("Date")
+# v35: missing match statistics filled from ESPN's team statistics (European cups, leagues football-data.co.uk doesn't cover),
+#      plus tackles, offsides and throw-ins, and ESPN's match id ("code:id") so the website can open each past match
+RES["espn"] = np.nan
+if "TS_EXTRA" in globals() and len(TS_EXTRA):
+    te_ = TS_EXTRA.drop(columns=["Comp"]).assign(Date=pd.to_datetime(TS_EXTRA["Date"]).dt.normalize())
+    RES = RES.merge(te_, on=["Date", "HomeTeam", "AwayTeam"], how="left", suffixes=("", "_espn"))
+    RES["espn"] = RES.pop("espn_espn") if "espn_espn" in RES else RES["espn"]
+    for c_ in ["HS", "AS", "HST", "AST", "HC", "AC", "HY", "AY", "HR", "AR", "HF", "AF"]:
+        if c_ + "_espn" in RES:
+            RES[c_] = RES[c_].fillna(pd.to_numeric(RES.pop(c_ + "_espn"), errors="coerce"))
+id_parts_ = []
+if "links" in globals() and len(links):
+    id_parts_.append(pd.DataFrame({"Date": pd.to_datetime(links["Date"]).dt.normalize(), "HomeTeam": links["HomeTeam"], "AwayTeam": links["AwayTeam"],
+                                   "espn2": links["comp"].astype(str) + ":" + links["event_id"].astype(str)}))
+_inv_eu = {v_: k_ for k_, v_ in EURO_CODES.items()} if "EURO_CODES" in globals() else {}
+if len(euro) and "event_id" in euro:
+    e_ = euro[euro["Competition"].isin(_inv_eu)]
+    id_parts_.append(pd.DataFrame({"Date": pd.to_datetime(e_["Date"]).dt.normalize(), "HomeTeam": e_["HomeTeam"], "AwayTeam": e_["AwayTeam"],
+                                   "espn2": e_["Competition"].map(_inv_eu) + ":" + e_["event_id"].astype(str)}))
+if id_parts_:
+    RES = RES.merge(pd.concat(id_parts_, ignore_index=True).drop_duplicates(["Date", "HomeTeam", "AwayTeam"]), on=["Date", "HomeTeam", "AwayTeam"], how="left")
+    RES["espn"] = RES["espn"].fillna(RES.pop("espn2"))
+if "THROW_LONG" in globals() and len(THROW_LONG):
+    th_ = THROW_LONG[THROW_LONG["is_home"] == 1].rename(columns={"Team": "HomeTeam", "Opp": "AwayTeam", "own": "HTI", "against": "ATI"})
+    th_ = th_.assign(Date=pd.to_datetime(th_["Date"]).dt.normalize())[["Date", "HomeTeam", "AwayTeam", "HTI", "ATI"]].drop_duplicates(["Date", "HomeTeam", "AwayTeam"])
+    RES = RES.merge(th_, on=["Date", "HomeTeam", "AwayTeam"], how="left")
+for c_ in ["HTK", "ATK", "HO", "AO", "HTI", "ATI"]:
+    RES[c_] = pd.to_numeric(RES.get(c_), errors="coerce")
 # v34: xG for the European cups, smaller European leagues and second divisions (PitchAPI), linked to our results by fixtures
 more_rows, more_n = [], {}
 for key_, (our_, prio_) in (PA_XG_MORE.items() if "PA_XG_MORE" in globals() and "PJ_MORE" in globals() else []):
@@ -243,7 +271,11 @@ for side, other in [("Home", "Away"), ("Away", "Home")]:
                        "ShotsF": RES["HS" if h_ else "AS"], "ShotsA": RES["AS" if h_ else "HS"], "SOTF": RES["HST" if h_ else "AST"], "SOTA": RES["AST" if h_ else "HST"],
                        "CornersF": RES["HC" if h_ else "AC"], "CornersA": RES["AC" if h_ else "HC"],
                        "CardsF": RES["HY" if h_ else "AY"].fillna(0) + 2 * RES["HR" if h_ else "AR"].fillna(0),
-                       "CardsA": RES["AY" if h_ else "HY"].fillna(0) + 2 * RES["AR" if h_ else "HR"].fillna(0)})
+                       "CardsA": RES["AY" if h_ else "HY"].fillna(0) + 2 * RES["AR" if h_ else "HR"].fillna(0),
+                       # v35: more team statistics for the website's averages, and ESPN's match id
+                       "FoulsF": RES["HF" if h_ else "AF"], "FoulsA": RES["AF" if h_ else "HF"], "TacklesF": RES["HTK" if h_ else "ATK"], "TacklesA": RES["ATK" if h_ else "HTK"],
+                       "OffsidesF": RES["HO" if h_ else "AO"], "OffsidesA": RES["AO" if h_ else "HO"], "ThrowsF": RES["HTI" if h_ else "ATI"], "ThrowsA": RES["ATI" if h_ else "HTI"],
+                       "espn": RES["espn"]})
     t_.loc[RES["HY"].isna().values, ["CardsF", "CardsA"]] = np.nan
     for tm_, g_ in t_.groupby("Team"):
         TEAM_RES.setdefault(tm_, []).append(g_)
@@ -253,7 +285,8 @@ def season_start_for(comp):
     calendar = comp in ("MLS",) or comp in ("Eliteserien", "Allsvenskan")
     return pd.Timestamp(TODAY.year, 1, 1) if calendar else pd.Timestamp(TODAY.year if TODAY.month >= 7 else TODAY.year - 1, 7, 1)
 
-ARROW_MIN = {"GF": 0.25, "GA": 0.25, "xGF": 0.2, "xGA": 0.2, "ShotsF": 1.5, "ShotsA": 1.5, "SOTF": 0.7, "SOTA": 0.7, "CornersF": 0.8, "CornersA": 0.8, "CardsF": 0.5, "CardsA": 0.5}
+ARROW_MIN = {"GF": 0.25, "GA": 0.25, "xGF": 0.2, "xGA": 0.2, "ShotsF": 1.5, "ShotsA": 1.5, "SOTF": 0.7, "SOTA": 0.7, "CornersF": 0.8, "CornersA": 0.8, "CardsF": 0.5, "CardsA": 0.5,
+             "FoulsF": 1.5, "FoulsA": 1.5, "TacklesF": 2.0, "TacklesA": 2.0, "OffsidesF": 0.6, "OffsidesA": 0.6, "ThrowsF": 2.0, "ThrowsA": 2.0}   # v35: more averages
 
 # ---------- trend spotting (v23): outcomes that happened in at least 5 of the last 7 ----------
 SPOT_MIN = 5
@@ -317,7 +350,9 @@ def team_trend(team, comp):
     rows = [{"Date": r.Date.strftime("%Y-%m-%d"), "Comp": SHORT_C.get(r.Comp, other_names.get(r.Comp, r.Comp) if "other_names" in globals() else r.Comp),
              "Venue": r.Venue, "Opponent": r.Opponent, "Score": f"{int(r.GF)}-{int(r.GA)}", "Result": r.Result,
              "xG": None if pd.isna(r.xGF) else f"{r.xGF:.1f}-{r.xGA:.1f}", "Shots": None if pd.isna(r.ShotsF) else f"{int(r.ShotsF)}-{int(r.ShotsA)}",
-             "Corners": None if pd.isna(r.CornersF) else f"{int(r.CornersF)}-{int(r.CornersA)}", "LastSeason": bool(r.LastSeason)} for r in last.itertuples()]
+             "Corners": None if pd.isna(r.CornersF) else f"{int(r.CornersF)}-{int(r.CornersA)}", "LastSeason": bool(r.LastSeason),
+             "Cards": None if pd.isna(r.CardsF) else f"{int(r.CardsF)}-{int(r.CardsA)}",          # v35: cards, and ESPN's match id for the website
+             "espn": r.espn if isinstance(r.espn, str) and ":" in r.espn else None} for r in last.itertuples()]
     return {"team": team, "rows": rows, "form": "".join(last["Result"].tolist()[::-1]), "ppg": float(pts.mean()), "spotted": spot_trends(g, comp),
             "stats": stats, "arrows": arrows, "perf": float(perf.mean()) if len(perf) else None, "perf_n": int(len(perf)),
             "home": rec(home), "away": rec(away), "season_matches": int(len(seas))}
@@ -688,6 +723,33 @@ if PLAYER_MODEL and len(lu):
     for pid_, p_ in _st.groupby("player_id")["pos"].agg(lambda s: s.map(line_of).mode().iloc[0] if len(s) else None).items():
         if pid_ in pname_ and p_:
             pname_[pid_]["line"] = p_
+    # v35: the position drawn on the pitch is the one a player usually starts in (his last 15 starts), not his last appearance
+    #      (a substitute's appearance has no position, and one game on the other flank used to move him)
+    for pid_, q_ in _st.groupby("player_id")["pos"].agg(lambda s: s.astype(str).str.upper().mode().iloc[0] if len(s) else None).items():
+        if pid_ in pname_ and q_:
+            pname_[pid_]["pos"] = q_
+    XI_BOUNDS = {"G": (1, 1), "D": (3, 5), "M": (2, 6), "F": (1, 4)}
+    def balance_xi(chosen_, probs_, pool_):
+        """v35: a playable shape: one goalkeeper, 3-5 defenders, 2-6 midfielders, 1-4 forwards. Swaps the least likely starter of a crowded
+        line for the likeliest player left of a short one (the model's own picks otherwise stay)."""
+        ln_ = lambda p_: pname_.get(p_, {}).get("line") or line_of(pname_.get(p_, {}).get("pos"))
+        chosen_ = list(chosen_)
+        for _ in range(6):
+            cnt_ = {k_: sum(ln_(p_) == k_ for p_ in chosen_) for k_ in "GDMF"}
+            short_ = [k_ for k_, (lo_, hi_) in XI_BOUNDS.items() if cnt_[k_] < lo_]
+            over_ = [k_ for k_, (lo_, hi_) in XI_BOUNDS.items() if cnt_[k_] > hi_]
+            if not short_ and not over_:
+                break
+            if short_:
+                want_, donors_ = [short_[0]], over_ or [k_ for k_, (lo_, hi_) in XI_BOUNDS.items() if cnt_[k_] > lo_ and k_ != short_[0]]
+            else:
+                want_, donors_ = [k_ for k_, (lo_, hi_) in XI_BOUNDS.items() if cnt_[k_] < hi_ and k_ not in over_], over_
+            cands_ = sorted((p_ for p_ in pool_ if p_ not in chosen_ and ln_(p_) in want_), key=lambda p_: -probs_.get(p_, 0))
+            out_ = min((p_ for p_ in chosen_ if ln_(p_) in donors_), key=lambda p_: probs_.get(p_, 0), default=None)
+            if not cands_ or out_ is None:
+                break
+            chosen_[chosen_.index(out_)] = cands_[0]
+        return chosen_
     for r_ in pm.itertuples():
         key_ = (r_.Competition, str(r_.Date)[:10], r_.Home, r_.Away)
         entry_ = {}
@@ -700,6 +762,9 @@ if PLAYER_MODEL and len(lu):
             sq_ = squads.get(tid_) if squads else None
             out_ids = {p_ for p_ in g_["player_id"].unique() if pname_.get(p_, {}).get("player") in missing_names
                        or str(status.get(("pid", p_), "")).startswith("FPL") or (sq_ is not None and p_ not in sq_)}
+            news_ = {p_: news_flag(team_, pname_.get(p_, {}).get("player")) for p_ in g_["player_id"].unique()} if "news_flag" in globals() else {}
+            out_ids |= {p_ for p_, f_ in news_.items() if f_ and f_[0] == "out"}          # v35: ruled out in team news
+            news_doubts = sorted(f"{pname_.get(p_, {}).get('player', p_)} ({f_[1]})" for p_, f_ in news_.items() if f_ and f_[0] == "doubt")
             xa_, xb_, xc_, share_ = xi_methods(g_.assign(sub_min=g_["sub_min"]), allev, len(allev), out_ids)
             probs_ = {p_: float(min(1.0, share_.get(p_, 0.0))) for p_ in set(xa_) | set(xb_) | set(xc_)}
             chosen = {"A": xa_, "B": xb_, "C": xc_}.get(best_m, xc_)
@@ -723,19 +788,25 @@ if PLAYER_MODEL and len(lu):
                     exp_changes = 11 - sum(probs_.get(p_, 0) for p_ in xb_)
                     if F["congested"].iloc[0] and exp_changes >= 3:
                         rotation_note = f"rotation likely: about {exp_changes:.0f} changes expected from the last XI (busy schedule)"
-            conf_ = None
+            conf_, conf_ev = None, None
             for ev_id_, xi_ in (CONFIRMED.get(str(tid_), {}) if "CONFIRMED" in globals() else {}).items():
                 if len(up_events) and (up_events.loc[up_events["event_id"].astype(str) == ev_id_, "Date"].astype(str).str[:10] == str(r_.Date)[:10]).any():
-                    conf_ = xi_
+                    conf_, conf_ev = xi_, ev_id_
+            # v35: a confirmed lineup is drawn in today's positions (from the announced team sheet), not each player's usual one
+            cpos_ = {p_: globals().get("CONFIRMED_POS", {}).get((str(conf_ev), str(p_))) for p_ in (conf_ or [])}
+            pos_of = lambda p_: cpos_.get(p_) or pname_.get(p_, {}).get("pos")
+            line_now = lambda p_: line_of(cpos_[p_]) if cpos_.get(p_) else (pname_.get(p_, {}).get("line") or line_of(pname_.get(p_, {}).get("pos")))
             if conf_:                                         # v27: the official lineup is out
-                chosen, probs_, rotation_note = sorted(conf_, key=lambda p_: "GDMF".find(grp(pname_.get(p_, {}).get("pos")))), {p_: 1.0 for p_ in conf_}, None
+                chosen, probs_, rotation_note = list(conf_), {p_: 1.0 for p_ in conf_}, None
             if not conf_ and len(chosen) < 11:                  # v33: always a full eleven (fill with the likeliest starters left)
                 rest_ = sorted((p_ for p_ in probs_ if p_ not in chosen), key=lambda p_: -probs_.get(p_, 0))
                 chosen = list(chosen) + rest_[:11 - len(chosen)]
-            chosen = sorted(chosen, key=lambda p_: "GDMF".find(pname_.get(p_, {}).get("line") or line_of(pname_.get(p_, {}).get("pos"))))
-            entry_[side_] = {"ours": [{"Player": pname_.get(p_, {}).get("player", p_), "Pos": pname_.get(p_, {}).get("pos"),
-                                       "Line": pname_.get(p_, {}).get("line") or line_of(pname_.get(p_, {}).get("pos")), "p": probs_.get(p_, 0.0)}
-                                      for p_ in chosen], "doubts": [] if conf_ else sorted(missing_names),
+            if not conf_:
+                chosen = balance_xi(chosen, probs_, list(probs_))
+            chosen = sorted(chosen, key=lambda p_: "GDMF".find(line_now(p_)))
+            entry_[side_] = {"ours": [{"Player": pname_.get(p_, {}).get("player", p_), "Pos": pos_of(p_), "Line": line_now(p_), "p": probs_.get(p_, 0.0),
+                                       "id": str(p_)}                         # v35: ESPN player id (the website links to the player)
+                                      for p_ in chosen], "doubts": [] if conf_ else sorted(missing_names) + news_doubts,
                              "method": "confirmed lineup" if conf_ else names_m[best_m], "rotation": rotation_note, "confirmed": bool(conf_)}
         EXPECTED_XI[key_] = entry_
     if "PA_KEY" in globals() and PA_KEY and len(EXPECTED_XI):

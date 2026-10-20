@@ -2,7 +2,7 @@ name = "pitchlab-bot"
 main = "worker.js"
 compatibility_date = "2025-06-01"
 
-# Every 15 minutes: check whether any match kicks off in about 70 minutes, and if so start a lineup-time run.
+# Every minute: live alerts; every 5 minutes: lineup alerts; every 15 minutes: start a lineup-time run if a followed match is due.
 [triggers]
 crons = ["* * * * *"]
 

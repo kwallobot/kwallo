@@ -131,7 +131,7 @@ async function settings(env, chat) {
   const lp = await livePrefs(env, chat);
   return reply(env, chat, "Your alerts (tap to switch on/off):", { reply_markup: { inline_keyboard: [
     [{ text: `${p.preview ? "✅" : "⬜"} Match preview (about a day before)`, callback_data: "s:preview:x" }],
-    [{ text: `${p.lineups ? "✅" : "⬜"} Lineups out (about 75 min before kickoff)`, callback_data: "s:lineups:x" }],
+    [{ text: `${p.lineups ? "✅" : "⬜"} Lineups (the moment they're announced)`, callback_data: "s:lineups:x" }],
     ...LIVE_PREFS.map(([k, label]) => [{ text: `${lp[k] ? "✅" : "⬜"} Live: ${label}`, callback_data: `l:${k}:x` }])] } });
 }
 
@@ -139,7 +139,11 @@ async function subscribers(env) {
   const subs = (await env.DB.prepare("SELECT chat_id, kind, slug FROM subs").all()).results || [];
   const prefs = {};
   for (const p of (await env.DB.prepare("SELECT chat_id, preview, lineups FROM prefs").all()).results || []) prefs[p.chat_id] = { preview: p.preview, lineups: p.lineups };
-  return { subs, prefs };
+  // v35: lineup alerts the Worker already sent, so the pipeline doesn't send them again
+  await ensureTables(env);
+  const lineups_sent = {};
+  for (const r of (await env.DB.prepare("SELECT slug, chats FROM lineup_sent").all()).results || []) lineups_sent[r.slug] = JSON.parse(r.chats || "[]").map(String);
+  return { subs, prefs, lineups_sent };
 }
 
 
@@ -153,7 +157,13 @@ async function ensureTables(env) {                       // created on first use
     env.DB.prepare("CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, text TEXT, created TEXT)"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS stats_daily (day TEXT, metric TEXT, k TEXT, n INTEGER, PRIMARY KEY (day, metric, k))"),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS sent_live (chat_id INTEGER, event_id TEXT, n INTEGER, PRIMARY KEY (chat_id, event_id))"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS lineup_sent (slug TEXT PRIMARY KEY, chats TEXT, at TEXT)"),   // v35: lineup alerts sent by the Worker
   ]);
+  // v35: an outbox row now holds one message for a list of chats (one database write per alert, not one per follower),
+  // and goals / full-time go first. These fail harmlessly once the columns exist.
+  for (const sql of ["ALTER TABLE outbox ADD COLUMN prio INTEGER DEFAULT 0", "ALTER TABLE outbox ADD COLUMN chats TEXT"]) {
+    try { await env.DB.prepare(sql).run(); } catch (e) {}
+  }
   _ready = true;
 }
 const LIVE_PREFS = [["kickoff", "🟢 Kick-off", 1], ["goals", "⚽ Goals (with assists)", 1], ["cards", "🟨 Yellow and red cards", 1], ["htft", "⏸ Half-time and full-time", 1],
@@ -173,6 +183,13 @@ async function bump(env, metric, k = "", n = 1) {
     .bind(day, metric, String(k), n).run();
 }
 
+// v35: a goal is identified by its minute and side only, so ESPN adding the assister (or renaming the event) later
+// no longer looks like a new goal and sends a second GOAL alert
+const KEY_V = 2;
+function eventKey(e, typeText) {
+  if (e.goal) return `goal|${e.clock}|${e.side || e.team || ""}`;
+  return `${typeText}|${e.clock}|${(e.names || []).join(",")}`;
+}
 function snapshot(ev) {                                   // one ESPN scoreboard event -> what we compare minute to minute
   const c = (ev.competitions || [])[0] || {};
   const st = (ev.status || c.status || {}).type || {};
@@ -183,9 +200,11 @@ function snapshot(ev) {                                   // one ESPN scoreboard
   const events = (c.details || []).map(d => {
     const t = String((d.type || {}).text || "");
     const names = (d.athletesInvolved || []).map(a => a.displayName || a.shortName).filter(Boolean);
-    return { key: `${t}|${(d.clock || {}).displayValue || ""}|${names.join(",")}`, clock: (d.clock || {}).displayValue || "", side: side((d.team || {}).id), names,
+    const e = { clock: (d.clock || {}).displayValue || "", side: side((d.team || {}).id), names,
              goal: !!d.scoringPlay || /goal/i.test(t), own: !!d.ownGoal || /own goal/i.test(t), pen: !!d.penaltyKick || /penalty/i.test(t),
              red: !!d.redCard || /red card/i.test(t), yellow: (!!d.yellowCard || /yellow/i.test(t)) && !(d.redCard || /red card/i.test(t)), sub: /substitut/i.test(t) };
+    e.key = eventKey(e, t);
+    return e;
   });
   const clock = String((ev.status || {}).displayClock || st.shortDetail || "");
   return { state: st.state, name: st.name || "", detail: st.shortDetail || "", minute: parseInt(clock) || 0,
@@ -201,8 +220,10 @@ function fillStatsFromSummary(snap, s) {                  // when the scoreboard
   if (!snap.events.length) {
     snap.events = ((s || {}).keyEvents || []).map(k => {
       const t = String((k.type || {}).text || ""); const names = (k.participants || []).map(p => (p.athlete || {}).displayName).filter(Boolean);
-      return { key: `${t}|${(k.clock || {}).displayValue || ""}|${names.join(",")}`, clock: (k.clock || {}).displayValue || "", side: null, names, team: (k.team || {}).displayName,
+      const e = { clock: (k.clock || {}).displayValue || "", side: null, names, team: (k.team || {}).displayName,
                goal: /goal/i.test(t), own: /own goal/i.test(t), pen: /penalty/i.test(t), red: /red card/i.test(t), yellow: /yellow/i.test(t) && !/red card/i.test(t), sub: /substitut/i.test(t) };
+      e.key = eventKey(e, t);
+      return e;
     });
   }
 }
@@ -279,7 +300,34 @@ function pressureCheck(prev, s) {                         // a side dominating: 
   return { hist, last, out };
 }
 
-async function liveTick(env, now = Date.now()) {
+// v35: rows for a list of values in one query (D1 allows 100 bound values per statement, so long lists go in chunks)
+async function inList(env, sqlPrefix, values) {
+  const out = [];
+  for (let i = 0; i < values.length; i += 90) {
+    const part = values.slice(i, i + 90);
+    if (!part.length) continue;
+    const r = await env.DB.prepare(`${sqlPrefix} (${part.map(() => "?").join(",")})`).bind(...part).all();
+    out.push(...(r.results || []));
+  }
+  return out;
+}
+const bumpStmt = (env, metric, k, n) => env.DB.prepare("INSERT INTO stats_daily (day, metric, k, n) VALUES (?, ?, ?, ?) ON CONFLICT(day, metric, k) DO UPDATE SET n = n + excluded.n")
+  .bind(new Date().toISOString().slice(0, 10), metric, String(k), n);
+const outboxStmt = (env, chats, text, prio, now) => env.DB.prepare("INSERT INTO outbox (chat_id, chats, text, created, prio) VALUES (NULL, ?, ?, ?, ?)")
+  .bind(JSON.stringify(chats), text, new Date(now).toISOString(), prio ? 1 : 0);
+function fansOf(m, by) {
+  return [...new Set([...(by[`team:${m.home_slug}`] || []), ...(by[`team:${m.away_slug}`] || []), ...(by[`league:${m.league_slug}`] || []), ...(by[`match:${m.slug}`] || [])])];
+}
+async function followersBy(env) {
+  const subs = (await env.DB.prepare("SELECT chat_id, kind, slug FROM subs").all()).results || [];
+  const by = {};
+  for (const s of subs) (by[`${s.kind}:${s.slug}`] = by[`${s.kind}:${s.slug}`] || []).push(s.chat_id);
+  return { subs, by };
+}
+
+// v35: B = { left: n } is this minute's budget of outside requests (ESPN, Telegram, GitHub). The free plan allows 50 per run;
+// v34 could need more on busy minutes, and the run then stopped part-way, so alerts waited or were lost.
+async function liveTick(env, now = Date.now(), B = { left: 45 }) {
   await ensureTables(env);
   const obj = await env.DATA.get("site/schedule.json");
   if (!obj) return "no schedule";
@@ -287,65 +335,115 @@ async function liveTick(env, now = Date.now()) {
   const live = sched.filter(m => m.espn && m.kickoff && now >= Date.parse(m.kickoff) - 5 * 60000 && now <= Date.parse(m.kickoff) + 150 * 60000);
   let queued = 0;
   if (live.length) {
-    const subs = (await env.DB.prepare("SELECT chat_id, kind, slug FROM subs").all()).results || [];
-    const by = {};
-    for (const s of subs) (by[`${s.kind}:${s.slug}`] = by[`${s.kind}:${s.slug}`] || []).push(s.chat_id);
-    const watched = live.map(m => ({ m, fans: [...new Set([...(by[`team:${m.home_slug}`] || []), ...(by[`team:${m.away_slug}`] || []), ...(by[`league:${m.league_slug}`] || []),
-                                                             ...(by[`match:${m.slug}`] || [])])] }))
-                        .filter(x => x.fans.length);
-    const boards = {};
-    for (const code of [...new Set(watched.map(x => x.m.espn.code))].slice(0, 12)) {
-      try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${code}/scoreboard`, { headers: { "user-agent": "Mozilla/5.0" } }); boards[code] = r.ok ? await r.json() : null; }
-      catch (e) { boards[code] = null; }
-    }
-    let summaries = 0;
-    const prefCache = {}, rows = [];
-    for (const { m, fans } of watched) {
-      const ev = (((boards[m.espn.code] || {}).events) || []).find(e => String(e.id) === String(m.espn.id));
-      if (!ev) continue;
-      const s = snapshot(ev);
-      // (v32: "pre" is recorded too, in the 5 minutes before kickoff, so the start of play can be detected)
-      if (s.stats.h.shots == null && summaries < 5) {            // no statistics on the scoreboard: use the match summary
-        summaries++;
-        try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${m.espn.code}/summary?event=${m.espn.id}`, { headers: { "user-agent": "Mozilla/5.0" } });
-              if (r.ok) fillStatsFromSummary(s, await r.json()); } catch (e) {}
+    const { by } = await followersBy(env);
+    const watched = live.map(m => ({ m, fans: fansOf(m, by) })).filter(x => x.fans.length);
+    if (watched.length) {
+      const boards = {};
+      for (const code of [...new Set(watched.map(x => x.m.espn.code))].slice(0, 12)) {
+        if (B.left <= 5) break;
+        B.left--;
+        try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${code}/scoreboard`, { headers: { "user-agent": "Mozilla/5.0" } }); boards[code] = r.ok ? await r.json() : null; }
+        catch (e) { boards[code] = null; }
       }
-      const row = await env.DB.prepare("SELECT data FROM live_state WHERE event_id = ?").bind(String(m.espn.id)).first();
-      const prev = row ? JSON.parse(row.data) : null;
-      const newGoals = prev ? s.events.filter(e => e.goal && !e.own && e.names.length < 2 && !(prev.seen || []).includes(e.key)) : [];
-      if (newGoals.length && summaries < 8) {                     // fetch the description once, to name the assister
-        summaries++;
-        try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${m.espn.code}/summary?event=${m.espn.id}`, { headers: { "user-agent": "Mozilla/5.0" } });
-              if (r.ok) { const sm = await r.json(); for (const g of newGoals) { const a = findAssist(sm, g); if (a) g.names.push(a); } } } catch (e) {}
-      }
-      if (prev && prev.state === "post") continue;                // already finished and reported
-      let msgs = prev ? liveMessages(m, prev, s) : liveMessages(m, null, s).filter(x => x.kind === "kickoff");   // first sighting: kick-off only
-      const pr = pressureCheck(prev, s);
-      if (prev) msgs = msgs.concat(pr.out);
-      const state = { state: s.state, stats: s.stats, seen: [...new Set([...((prev && prev.seen) || []), ...s.events.map(e => e.key)])],
-                      hist: pr.hist, pressure: pr.last, ko_sent: !!((prev && prev.ko_sent) || s.state === "in" || s.state === "post"), ht_sent: !!((prev && prev.ht_sent) || /HALFTIME/i.test(s.name) || /^HT$/i.test(s.detail)) };
-      await env.DB.prepare("INSERT INTO live_state (event_id, data, updated) VALUES (?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET data = excluded.data, updated = excluded.updated")
-        .bind(String(m.espn.id), JSON.stringify(state), new Date(now).toISOString()).run();
-      for (const msg of msgs) {
-        for (const chat of fans) {
-          const p = prefCache[chat] || (prefCache[chat] = await livePrefs(env, chat));
-          if (!p[msg.kind]) continue;
-          const cnt = await env.DB.prepare("SELECT n FROM sent_live WHERE chat_id = ? AND event_id = ?").bind(chat, String(m.espn.id)).first();
-          if (!msg.always && cnt && cnt.n >= MAX_PER_MATCH) continue;
-          rows.push(env.DB.prepare("INSERT INTO outbox (chat_id, text, created) VALUES (?, ?, ?)").bind(chat, msg.text, new Date(now).toISOString()));
-          rows.push(env.DB.prepare("INSERT INTO sent_live (chat_id, event_id, n) VALUES (?, ?, 1) ON CONFLICT(chat_id, event_id) DO UPDATE SET n = n + 1").bind(chat, String(m.espn.id)));
-          queued++;
+      // v35: everything this minute needs from the database in four reads, and one write at the end
+      const ids = watched.map(x => String(x.m.espn.id));
+      const fansAll = [...new Set(watched.flatMap(x => x.fans))];
+      const prevOf = Object.fromEntries((await inList(env, "SELECT event_id, data FROM live_state WHERE event_id IN", ids)).map(r => [r.event_id, JSON.parse(r.data)]));
+      const prefs = {};
+      for (const c of fansAll) prefs[c] = Object.fromEntries(LIVE_PREFS.map(([k, , d]) => [k, d]));
+      for (const r of await inList(env, "SELECT chat_id, k, v FROM prefs2 WHERE chat_id IN", fansAll)) if (prefs[r.chat_id]) prefs[r.chat_id][r.k] = r.v;
+      let summaries = 0;
+      const rows = [], kinds = {};
+      for (const { m, fans } of watched) {
+        const ev = (((boards[m.espn.code] || {}).events) || []).find(e => String(e.id) === String(m.espn.id));
+        if (!ev) continue;
+        const s = snapshot(ev);
+        // (v32: "pre" is recorded too, in the 5 minutes before kickoff, so the start of play can be detected)
+        if (s.stats.h.shots == null && summaries < 5 && B.left > 5) {   // no statistics on the scoreboard: use the match summary
+          summaries++; B.left--;
+          try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${m.espn.code}/summary?event=${m.espn.id}`, { headers: { "user-agent": "Mozilla/5.0" } });
+                if (r.ok) fillStatsFromSummary(s, await r.json()); } catch (e) {}
         }
-        await bump(env, "alerts_live", msg.kind, fans.length);
+        const prev0 = prevOf[String(m.espn.id)] || null;
+        // v35: state saved by v34 used other event keys: count what is on the board now as already sent (no repeats after the upgrade)
+        const prev = prev0 && prev0.kv !== KEY_V ? { ...prev0, seen: s.events.map(e => e.key) } : prev0;
+        const newGoals = prev ? s.events.filter(e => e.goal && !e.own && e.names.length < 2 && !(prev.seen || []).includes(e.key)) : [];
+        if (newGoals.length && summaries < 8 && B.left > 5) {          // fetch the description once, to name the assister
+          summaries++; B.left--;
+          try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${m.espn.code}/summary?event=${m.espn.id}`, { headers: { "user-agent": "Mozilla/5.0" } });
+                if (r.ok) { const sm = await r.json(); for (const g of newGoals) { const a = findAssist(sm, g); if (a) g.names.push(a); } } } catch (e) {}
+        }
+        if (prev && prev.state === "post") continue;                // already finished and reported
+        let msgs = prev ? liveMessages(m, prev, s) : liveMessages(m, null, s).filter(x => x.kind === "kickoff");   // first sighting: kick-off only
+        const pr = pressureCheck(prev, s);
+        if (prev) msgs = msgs.concat(pr.out);
+        const sent = { ...((prev && prev.sent) || {}) };            // v35: alerts per person for this match, kept with the match
+        for (const msg of msgs) {
+          const to = fans.filter(chat => (prefs[chat] || {})[msg.kind] && (msg.always || (sent[chat] || 0) < MAX_PER_MATCH));
+          if (!to.length) continue;
+          to.forEach(chat => { sent[chat] = (sent[chat] || 0) + 1; });
+          rows.push(outboxStmt(env, to, msg.text, msg.always, now));
+          queued += to.length;
+          kinds[msg.kind] = (kinds[msg.kind] || 0) + to.length;
+        }
+        const state = { kv: KEY_V, state: s.state, stats: s.stats, seen: [...new Set([...((prev && prev.seen) || []), ...s.events.map(e => e.key)])], sent,
+                        hist: pr.hist, pressure: pr.last, ko_sent: !!((prev && prev.ko_sent) || s.state === "in" || s.state === "post"), ht_sent: !!((prev && prev.ht_sent) || /HALFTIME/i.test(s.name) || /^HT$/i.test(s.detail)) };
+        // v35: the match state is saved in the same write as its alerts, so a failed run can't mark events as sent without queueing them
+        rows.push(env.DB.prepare("INSERT INTO live_state (event_id, data, updated) VALUES (?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET data = excluded.data, updated = excluded.updated")
+          .bind(String(m.espn.id), JSON.stringify(state), new Date(now).toISOString()));
       }
+      for (const [k, n] of Object.entries(kinds)) rows.push(bumpStmt(env, "alerts_live", k, n));
+      if (rows.length) await env.DB.batch(rows);
     }
-    if (rows.length) await env.DB.batch(rows);
   }
   const stale = sched.filter(m => m.kickoff && now - Date.parse(m.kickoff) > 24 * 3600000).map(m => m.slug);
   if (new Date(now).getUTCMinutes() === 7 && stale.length)          // once an hour: tidy finished single-match follows
     await env.DB.batch(stale.slice(0, 40).map(s => env.DB.prepare("DELETE FROM subs WHERE kind = 'match' AND slug = ?").bind(s)));
-  const sent = await flushOutbox(env);
+  const sent = await flushOutbox(env, B);
   return `live: ${live.length} in progress, ${queued} queued, ${sent} sent`;
+}
+
+// v35: lineup alerts straight from ESPN, as soon as both teams are announced (about an hour before kickoff), instead of waiting
+// for a GitHub run. Checked every 5 minutes for followed matches kicking off in the next 80 minutes; each match is alerted once.
+function lineupText(m, s, site) {
+  const ko = m.kickoff ? new Date(m.kickoff).toUTCString().slice(17, 22) + " UTC" : "";
+  const side = r => { const xi = (r.roster || []).filter(p => p.starter).map(p => (p.athlete || {}).displayName).filter(Boolean);
+    return `<b>${esc((r.team || {}).displayName || "")}</b>${r.formation ? ` (${esc(r.formation)})` : ""}: ${esc(xi.join(", "))}`; };
+  const R = s.rosters || [], H = R.find(r => r.homeAway === "home") || R[0], A = R.find(r => r.homeAway === "away") || R[1];
+  return `📋 <b>Lineups: ${esc(m.home)} v ${esc(m.away)}</b>${m.competition ? ` · ${esc(m.competition)}` : ""}${ko ? `, kick-off ${ko}` : ""}\n\n${side(H)}\n\n${side(A)}`
+    + (m.pH != null ? `\n\nChances: ${esc(m.home)} ${pct(m.pH)} · draw ${pct(m.pD)} · ${esc(m.away)} ${pct(m.pA)}` : "")
+    + (site ? `\n${site}/#/match/${encodeURIComponent(m.slug)}/lineups` : "");
+}
+async function lineupTick(env, now = Date.now(), B = { left: 10 }) {
+  await ensureTables(env);
+  const obj = await env.DATA.get("site/schedule.json");
+  if (!obj) return "no schedule";
+  const soon = (await obj.json()).filter(m => m.espn && m.kickoff && Date.parse(m.kickoff) > now && Date.parse(m.kickoff) - now <= 80 * 60000);
+  if (!soon.length) return "no kickoffs soon";
+  const { by } = await followersBy(env);
+  const cand = soon.map(m => ({ m, fans: fansOf(m, by) })).filter(x => x.fans.length);
+  if (!cand.length) return "nobody follows the next kickoffs";
+  const done = Object.fromEntries((await inList(env, "SELECT slug, chats FROM lineup_sent WHERE slug IN", cand.map(x => x.m.slug))).map(r => [r.slug, new Set(JSON.parse(r.chats || "[]").map(String))]));
+  const off = new Set((await inList(env, "SELECT chat_id FROM prefs WHERE lineups = 0 AND chat_id IN", [...new Set(cand.flatMap(x => x.fans))])).map(r => String(r.chat_id)));
+  const rows = []; let n = 0;
+  for (const { m, fans } of cand) {
+    const to = fans.filter(c => !off.has(String(c)) && !(done[m.slug] || new Set()).has(String(c)));
+    if (!to.length || B.left <= 2) continue;
+    B.left--;
+    let s = null;
+    try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${m.espn.code}/summary?event=${m.espn.id}`, { headers: { "user-agent": "Mozilla/5.0" } }); s = r.ok ? await r.json() : null; } catch (e) {}
+    const ready = s && (s.rosters || []).length === 2 && s.rosters.every(r => (r.roster || []).filter(p => p.starter).length >= 11);
+    if (!ready) continue;
+    rows.push(outboxStmt(env, to, lineupText(m, s, env.SITE_URL || ""), true, now));
+    rows.push(env.DB.prepare("INSERT INTO lineup_sent (slug, chats, at) VALUES (?, ?, ?) ON CONFLICT(slug) DO UPDATE SET chats = excluded.chats, at = excluded.at")
+      .bind(m.slug, JSON.stringify([...new Set([...(done[m.slug] || []), ...to.map(String)])]), new Date(now).toISOString()));
+    n += to.length;
+  }
+  if (n) rows.push(bumpStmt(env, "alerts_live", "lineups", n));
+  if (rows.length) await env.DB.batch(rows);
+  if (new Date(now).getUTCHours() === 3 && new Date(now).getUTCMinutes() < 5)       // once a day: forget lineup alerts older than 3 days
+    await env.DB.prepare("DELETE FROM lineup_sent WHERE at < ?").bind(new Date(now - 3 * 86400000).toISOString()).run();
+  return `lineups: ${n} queued`;
 }
 async function liveScores(env, now = Date.now()) {
   // matches that kicked off in the last 2.5 hours, or finished earlier today: { slug: {state, detail, hs, as} }
@@ -368,15 +466,28 @@ async function liveScores(env, now = Date.now()) {
   }
   return out;
 }
-async function flushOutbox(env, max = 30) {                 // sends up to 30 a minute (well inside the free plan's limits)
-  const q = (await env.DB.prepare("SELECT id, chat_id, text FROM outbox ORDER BY id LIMIT ?").bind(max).all()).results || [];
-  const done = [];
+// v35: sends as many queued messages as this minute's request budget allows (goals and full-time first), 10 at a time in parallel.
+// Telegram itself allows about 30 messages a second; the limit here is Cloudflare's per-run request allowance.
+async function flushOutbox(env, B = { left: 30 }) {
+  if (typeof B === "number") B = { left: B };
+  if (B.left <= 0) return 0;
+  const q = (await env.DB.prepare("SELECT id, chat_id, chats, text FROM outbox ORDER BY prio DESC, id LIMIT 25").all()).results || [];
+  if (!q.length) return 0;
+  const active = new Set(((await env.DB.prepare("SELECT DISTINCT chat_id FROM subs").all()).results || []).map(r => String(r.chat_id)));   // skip anyone who sent /stop
+  const jobs = [], stmts = [];
   for (const r of q) {
-    await tg(env, "sendMessage", { chat_id: r.chat_id, text: r.text, parse_mode: "HTML", disable_web_page_preview: true });
-    done.push(env.DB.prepare("DELETE FROM outbox WHERE id = ?").bind(r.id));
+    if (B.left <= 0) break;
+    const list = (r.chats ? JSON.parse(r.chats) : [r.chat_id]).filter(c => active.has(String(c)));
+    const now_ = list.slice(0, B.left), rest = list.slice(B.left);
+    B.left -= now_.length;
+    now_.forEach(c => jobs.push({ c, text: r.text }));
+    stmts.push(rest.length ? env.DB.prepare("UPDATE outbox SET chats = ?, chat_id = NULL WHERE id = ?").bind(JSON.stringify(rest), r.id)
+                           : env.DB.prepare("DELETE FROM outbox WHERE id = ?").bind(r.id));
   }
-  if (done.length) await env.DB.batch(done);
-  return q.length;
+  for (let i = 0; i < jobs.length; i += 10)
+    await Promise.all(jobs.slice(i, i + 10).map(j => tg(env, "sendMessage", { chat_id: j.c, text: j.text, parse_mode: "HTML", disable_web_page_preview: true }).catch(() => false)));
+  if (stmts.length) await env.DB.batch(stmts);
+  return jobs.length;
 }
 async function adminStats(env, chat) {
   if (!env.ADMIN_CHAT_ID) return reply(env, chat, `Your chat ID is <code>${chat}</code>. To make /stats yours, add it in Cloudflare as a secret named ADMIN_CHAT_ID, then send /stats again.`);
@@ -440,6 +551,119 @@ async function maybeDispatch(env, now = Date.now()) {
   return "GitHub said " + r.status;
 }
 
+// ================= v35: a past match's statistics and a player's transfer history, for the website =================
+// Both come from ESPN when someone opens the page, and are cached at the edge (finished matches for a day, transfers for a week).
+const STAT_LABELS = [["possessionPct", "Possession %"], ["totalShots", "Shots"], ["shotsOnTarget", "Shots on target"], ["wonCorners", "Corners"],
+  ["foulsCommitted", "Fouls"], ["yellowCards", "Yellow cards"], ["redCards", "Red cards"], ["offsides", "Offsides"], ["saves", "Saves"],
+  ["totalTackles", "Tackles"], ["interceptions", "Interceptions"], ["totalPasses", "Passes"], ["passPct", "Pass accuracy"], ["totalCrosses", "Crosses"]];
+async function matchResult(code, id) {
+  const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${code}/summary?event=${id}`, { headers: { "user-agent": "Mozilla/5.0" } });
+  if (!r.ok) return null;
+  const s = await r.json();
+  const comp = ((s.header || {}).competitions || [])[0] || {};
+  const teams = (comp.competitors || []).map(c => ({ side: c.homeAway, name: (c.team || {}).displayName, score: c.score, winner: !!c.winner }));
+  const box = ((s.boxscore || {}).teams || []);
+  const asPct = (k, v) => (/Pct$/.test(k) && k !== "possessionPct" && v != null && isFinite(parseFloat(v)) && parseFloat(v) <= 1 ? `${Math.round(100 * parseFloat(v))}%` : v);   // 0.7 -> 70%
+  const statOf = side => { const t = box.find(b => b.homeAway === side) || {}; return Object.fromEntries((t.statistics || []).map(x => [x.name, asPct(x.name, x.displayValue)])); };
+  const H = statOf("home"), A = statOf("away");
+  const stats = STAT_LABELS.filter(([k]) => H[k] != null || A[k] != null).map(([k, label]) => ({ key: k, label, home: H[k] ?? "–", away: A[k] ?? "–" }));
+  const events = (s.keyEvents || []).filter(k => /goal|card|penalty|substitut/i.test(String((k.type || {}).text || ""))).map(k => ({
+    clock: (k.clock || {}).displayValue || "", type: String((k.type || {}).text || ""), team: (k.team || {}).displayName || "",
+    text: k.text || (k.participants || []).map(p => (p.athlete || {}).displayName).filter(Boolean).join(", ") }));
+  const lineups = (s.rosters || []).map(t => ({ side: t.homeAway, team: (t.team || {}).displayName, formation: t.formation || null,
+    xi: (t.roster || []).filter(p => p.starter).map(p => ({ name: (p.athlete || {}).displayName, pos: (p.position || {}).abbreviation || "", id: String((p.athlete || {}).id || "") })) }));
+  return { competition: ((s.header || {}).league || {}).name || "", date: comp.date || null, status: (((comp.status || {}).type) || {}).detail || "",
+           completed: !!((((comp.status || {}).type) || {}).completed), venue: ((s.gameInfo || {}).venue || {}).fullName || "", teams, stats, events, lineups };
+}
+async function transfers(id) {
+  const r = await fetch(`https://sports.core.api.espn.com/v2/sports/soccer/athletes/${id}/transactions?lang=en&region=us`, { headers: { "user-agent": "Mozilla/5.0" } });
+  if (!r.ok) return [];
+  const items = ((await r.json()).items || []).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 10);
+  const refs = [...new Set(items.flatMap(t => [(t.from || {}).$ref, (t.to || {}).$ref]).filter(Boolean))].slice(0, 16);
+  const names = {};
+  await Promise.all(refs.map(async ref => {
+    try { const x = await fetch(ref.replace(/^http:\/\/sports\.core\.api\.espn\.(pvt|com)/, "https://sports.core.api.espn.com"), { headers: { "user-agent": "Mozilla/5.0" } });
+          if (x.ok) { const j = await x.json(); names[ref] = j.displayName || j.name || ""; } } catch (e) {}
+  }));
+  return items.map(t => ({ date: String(t.date || "").slice(0, 10), from: names[(t.from || {}).$ref] || "", to: names[(t.to || {}).$ref] || "",
+                           type: t.type || "", fee: t.displayAmount && t.displayAmount !== t.type ? t.displayAmount : "" }));
+}
+// ================= v35: the match stats card (in play and full-time) =================
+// In play: ESPN's statistics (every minute, whole match only). After full-time: PitchAPI's full statistics (xG, big chances,
+// ratings, 1st / 2nd half), found by date and team names; until PitchAPI has the match, ESPN's figures stay.
+const OVERVIEW = ["possessionPct", "totalShots", "shotsOnTarget", "saves", "wonCorners", "foulsCommitted", "totalPasses", "totalTackles", "yellowCards", "redCards", "offsides"];
+function espnCard(R) {
+  const by = Object.fromEntries((R.stats || []).map(s => [s.key, s]));
+  const items = keys => keys.map(k => by[k]).filter(Boolean).map(s => ({ label: s.label, home: s.home, away: s.away, key: s.key }));
+  const rest = (R.stats || []).filter(s => !OVERVIEW.includes(s.key)).map(s => ({ label: s.label, home: s.home, away: s.away, key: s.key }));
+  return { source: "espn", periods: [{ name: "All", groups: [{ title: "Match overview", items: items(OVERVIEW) }, ...(rest.length ? [{ title: "More", items: rest }] : [])] }] };
+}
+const PA_LABELS = { BallPossesion: "Ball possession", expected_goals: "Expected goals (xG)", big_chance: "Big chances", total_shots: "Total shots", keeper_saves: "Goalkeeper saves",
+  corners: "Corner kicks", fouls: "Fouls", passes: "Passes", "matchstats.headers.tackles": "Tackles", free_kicks: "Free kicks", yellow_cards: "Yellow cards", red_cards: "Red cards",
+  player_throws: "Throw-ins", Offsides: "Offsides", rating: "Average rating", average_rating: "Average rating", ShotsOnTarget: "Shots on target", shots_on_target: "Shots on target", expected_goals_on_target: "xG on target (xGOT)" };
+const prettyKey = k => PA_LABELS[k] || String(k).replace(/^matchstats\.headers\./, "").replace(/[_.]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
+const PA_STOP = new Set(["fc", "fk", "sk", "ac", "nk", "hnk", "afc", "sc", "cf", "club", "sv", "bk", "if", "ks", "mfk", "ofk", "fsv", "the", "cd", "ud", "sd", "rc", "ss", "ssc", "de", "calcio"]);
+const PA_ALIAS = { prague: "praha", belgrade: "beograd", munich: "munchen", lisbon: "lisboa" };
+const normTeam = s => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)
+  .filter(w => w && !PA_STOP.has(w)).map(w => PA_ALIAS[w] || w).join("");
+function teamSim(a, b) {                                  // 0..1: letter-pair overlap, or 0.9 when one name contains the other
+  const x = normTeam(a), y = normTeam(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const pairs = s => { const m = new Map(); for (let i = 0; i < s.length - 1; i++) { const g = s.slice(i, i + 2); m.set(g, (m.get(g) || 0) + 1); } return m; };
+  const A = pairs(x), B = pairs(y); let n = 0;
+  for (const [g, c] of A) n += Math.min(c, B.get(g) || 0);
+  const dice = (2 * n) / Math.max(1, x.length - 1 + y.length - 1);
+  return (x.includes(y) || y.includes(x)) && Math.min(x.length, y.length) >= 4 ? Math.max(0.9, dice) : dice;
+}
+async function pa(env, path) {
+  const r = await fetch(`https://api.pitchapi.dev${path}`, { headers: { "X-API-KEY": env.PITCHAPI_KEY } });
+  if (!r.ok) return null;
+  return (await r.json()).data || null;
+}
+async function paDay(env, ctx, day) {                     // one day's PitchAPI matches, cached for 6 hours
+  const ck = new Request(`https://kwallo-cache/pa-day/${day}`), hit = await caches.default.match(ck);
+  if (hit) return hit.json();
+  const list = ((await pa(env, `/v1/date/${day}`)) || {}).matches || [];
+  if (list.length) ctx.waitUntil(caches.default.put(ck, new Response(JSON.stringify(list), { headers: { "cache-control": "public, max-age=21600" } })));   // a failed call isn't kept
+  return list;
+}
+async function pitchapiCard(env, ctx, R) {
+  if (!env.PITCHAPI_KEY || !R.date) return null;
+  const H = (R.teams || []).find(t => t.side === "home") || {}, A = (R.teams || []).find(t => t.side === "away") || {};
+  const d0 = new Date(R.date), days = [0, -1, 1].map(k => new Date(d0.getTime() + k * 86400000).toISOString().slice(0, 10));
+  let best = null;
+  for (const day of days) {
+    for (const m of await paDay(env, ctx, day)) {
+      const s = (teamSim(H.name, (m.home_team || {}).name) + teamSim(A.name, (m.away_team || {}).name)) / 2;
+      if (s >= 0.6 && (!best || s > best.s)) best = { s, id: m.id };
+    }
+    if (best) break;
+  }
+  if (!best) return null;
+  const st = await pa(env, `/v1/matches/${best.id}/stats`);
+  const periods = ((st || {}).periods || []).map(p => {
+    const nm = String(p.period || "");
+    const name = /^all$/i.test(nm) ? "All" : /first|1st|^1$|^1h/i.test(nm) ? "1st" : /second|2nd|^2$|^2h/i.test(nm) ? "2nd" : nm;
+    const groups = (p.groups || []).map(g => ({ title: g.title || g.name || prettyKey(g.key || ""),
+      items: (g.items || []).filter(it => it.home != null && it.away != null).map(it => ({ key: it.key, label: it.title || it.name || it.label || prettyKey(it.key), home: String(it.home), away: String(it.away) })) }))
+      .filter(g => g.items.length);
+    return { name, groups };
+  }).filter(p => p.groups.length);
+  if (!periods.length) return null;                       // PitchAPI hasn't filled this match in yet
+  periods.sort((a, b) => ["All", "1st", "2nd"].indexOf(a.name) - ["All", "1st", "2nd"].indexOf(b.name));
+  return { source: "pitchapi", pa_id: best.id, periods };
+}
+async function cachedJSON(ctx, key, maxAge, make) {
+  const ck = new Request(key), hit = await caches.default.match(ck);
+  if (hit) return hit;
+  const out = await make();
+  if (out == null) return new Response(JSON.stringify({ error: "not available" }), { status: 404, headers: { ...CORS, "content-type": "application/json" } });
+  const res = new Response(JSON.stringify(out), { headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": `public, max-age=${maxAge}` } });
+  ctx.waitUntil(caches.default.put(ck, res.clone()));
+  return res;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -471,7 +695,8 @@ export default {
     }
     if (url.pathname.startsWith("/api/site/")) {
       const rel = url.pathname.slice("/api/site/".length);
-      if (!/^[a-z0-9][a-z0-9\-\/_.]*\.json$/.test(rel) || rel.includes("..")) return new Response("not found", { status: 404, headers: CORS });
+      // v35: capitals allowed (PitchAPI player pages end in a mixed-case id, e.g. bruno-fernandes-G7uM; they were unreachable before)
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9\-\/_.]*\.json$/.test(rel) || rel.includes("..")) return new Response("not found", { status: 404, headers: CORS });
       const cache = caches.default, ck = new Request(url.toString(), { method: "GET" });
       const hit = await cache.match(ck);
       if (hit) return hit;
@@ -480,6 +705,25 @@ export default {
       const res = new Response(obj.body, { headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=120" } });
       ctx.waitUntil(cache.put(ck, res.clone()));
       return res;
+    }
+    if (url.pathname === "/api/result") {                             // v35: a past match's statistics, e.g. ?e=eng.1:740123
+      const m = String(url.searchParams.get("e") || "").match(/^([a-z0-9._]{3,30}):(\d{3,12})$/);
+      if (!m) return new Response("not found", { status: 404, headers: CORS });
+      // v35: with the stats card; cached for a minute in play, 15 minutes after full-time until PitchAPI has it, then a day
+      const ck = new Request(`https://kwallo-cache/result/${m[1]}/${m[2]}`), hit = await caches.default.match(ck);
+      if (hit) return hit;
+      const R = await matchResult(m[1], m[2]).catch(() => null);
+      if (!R) return new Response(JSON.stringify({ error: "not available" }), { status: 404, headers: { ...CORS, "content-type": "application/json" } });
+      R.card = (R.completed ? await pitchapiCard(env, ctx, R).catch(() => null) : null) || espnCard(R);
+      const maxAge = R.card.source === "pitchapi" ? 86400 : R.completed ? 900 : 60;
+      const res = new Response(JSON.stringify(R), { headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": `public, max-age=${maxAge}` } });
+      ctx.waitUntil(caches.default.put(ck, res.clone()));
+      return res;
+    }
+    if (url.pathname === "/api/transfers") {                          // v35: a player's transfer history, e.g. ?id=196176
+      const id = String(url.searchParams.get("id") || "");
+      if (!/^\d{2,12}$/.test(id)) return new Response("not found", { status: 404, headers: CORS });
+      return cachedJSON(ctx, `https://kwallo-cache/transfers/${id}`, 7 * 86400, () => transfers(id).catch(() => null));
     }
     if (url.pathname === "/api/hit" && request.method === "POST") {   // v32: anonymous feature counters (no personal data)
       try { const b = await request.json(); const f = String(b.f || "").slice(0, 40).replace(/[^a-z0-9_-]/gi, ""); if (f) ctx.waitUntil(bump(env, "web", f)); } catch (e) {}
@@ -501,9 +745,17 @@ export default {
   },
   async scheduled(event, env, ctx) {
     // v31: runs every minute (cron "* * * * *"): live alerts each minute, the lineup-run check every 15 minutes
-    const minute = new Date(event.scheduledTime || Date.now()).getUTCMinutes();
-    ctx.waitUntil(liveTick(env).then(r => console.log(r)).catch(e => console.log("live failed", e)));
-    if (minute % 15 === 0) ctx.waitUntil(maybeDispatch(env).then(r => console.log("lineup check:", r)));
+    // v35: one shared budget of outside requests per run (the free plan allows 50), used in order: the GitHub lineup-run check,
+    //      lineup alerts (every 5 minutes), then live alerts and sending
+    const now = event.scheduledTime || Date.now(), minute = new Date(now).getUTCMinutes(), B = { left: 45 };
+    ctx.waitUntil((async () => {
+      if (minute % 15 === 0) { B.left--; try { console.log("lineup check:", await maybeDispatch(env, now)); } catch (e) { console.log("lineup check failed", e); } }
+      if (minute % 5 === 2) { const L = { left: Math.min(10, B.left - 25) }, start = L.left;
+        try { console.log(await lineupTick(env, now, L)); } catch (e) { console.log("lineup alerts failed", e); }
+        B.left -= start - L.left; }
+      try { console.log(await liveTick(env, now, B)); } catch (e) { console.log("live failed", e); }
+    })());
   },
 };
-export { liveScores, findAssist, handleUpdate, maybeDispatch, subscribers, search, liveTick, snapshot, liveMessages, pressureCheck, flushOutbox, adminStats };
+export { liveScores, findAssist, handleUpdate, maybeDispatch, subscribers, search, liveTick, lineupTick, snapshot, liveMessages, pressureCheck, flushOutbox, adminStats,
+         eventKey, matchResult, transfers, espnCard, pitchapiCard, teamSim };

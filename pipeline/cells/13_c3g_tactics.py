@@ -6,13 +6,14 @@
 import joblib
 TAC_LONG = pd.DataFrame(columns=["Team", "Date"])
 inv_pa = {f"{c}:{n}": our for our, (c, n) in {**PA_XG_LEAGUES, **PA_TACTIC_LEAGUES}.items()} if "PA_XG_LEAGUES" in globals() else {}
+inv_pa.update({k_: v_[0] for k_, v_ in (PA_CUP_TACTICS.items() if "PA_CUP_TACTICS" in globals() else [])})     # v35: the European cups (throw-ins)
 parts_t, THROW_ROWS, COUNT_ROWS = [], [], []
 if len(PA_TACTICS):
     for key_, g_ in PA_TACTICS.groupby("league"):
         our = inv_pa.get(key_)
         if not our:
             continue
-        f_ = league_frame(our)
+        f_ = euro[euro["Competition"] == our] if our in EURO_CODES.values() and len(euro) else league_frame(our)
         if f_ is None or not len(f_):
             continue                                              # v29: this league's results didn't load this run
         mp_ = map_by_fixtures(g_.rename(columns={"date": "Date", "home": "H", "away": "A"})[["Date", "H", "A"]],
@@ -48,13 +49,66 @@ if len(understat_teams) and "us_map" in globals():
 if parts_t:
     TAC_LONG = pd.concat([pd.DataFrame(p_) if isinstance(p_, list) else p_ for p_ in [pd.DataFrame([x for x in parts_t if isinstance(x, dict)])] + [x for x in parts_t if not isinstance(x, dict)]], ignore_index=True)
     TAC_LONG = TAC_LONG.groupby(["Team", "Date"], as_index=False).mean(numeric_only=True).sort_values("Date")
+# v35: cards in ESPN's team statistics (saved from v35 on): fill in the European cups' earlier matches, newest first, time-limited
+TS_BACKFILL_MINUTES = 4
+def _ts_backfill(codes_, minutes_):
+    t0_, n_ = time.time(), 0
+    for code_ in codes_:
+        tp_ = f"{SAVE_DIR}/lineups/{code_}_teamstats.csv"
+        if not os.path.exists(tp_) or time.time() - t0_ > minutes_ * 60:
+            continue
+        ts_ = pd.read_csv(tp_, dtype=str)
+        for c_ in ("yellowCards", "redCards"):
+            ts_[c_] = (ts_[c_] if c_ in ts_ else pd.Series(np.nan, index=ts_.index)).astype(object)    # text column (holds "na" markers)
+        todo_ = ts_[ts_["yellowCards"].isna()].sort_values("date", ascending=False)["event_id"].drop_duplicates().tolist()
+        got_ = {}
+        for eid_ in todo_:
+            if time.time() - t0_ > minutes_ * 60:
+                break
+            s_ = espn_get(f"{ESPN_BASE}/{code_}/summary?event={eid_}", pause=0.3) or {}
+            for tm_ in (s_.get("boxscore") or {}).get("teams") or []:
+                st_ = {x_.get("name"): x_.get("displayValue") for x_ in tm_.get("statistics") or []}
+                got_[(str(eid_), str((tm_.get("team") or {}).get("id")))] = (st_.get("yellowCards", "na"), st_.get("redCards", "na"))
+            if s_ and not got_.get((str(eid_), str(ts_.loc[ts_["event_id"] == str(eid_), "team_id"].iloc[0]))):
+                got_[(str(eid_), "*")] = ("na", "na")           # no statistics for this match: don't ask again
+            n_ += 1
+        if got_:
+            for i_, r_ in ts_.iterrows():
+                v_ = got_.get((str(r_["event_id"]), str(r_["team_id"]))) or got_.get((str(r_["event_id"]), "*"))
+                if v_ and pd.isna(r_["yellowCards"]):
+                    ts_.at[i_, "yellowCards"], ts_.at[i_, "redCards"] = v_
+            ts_.to_csv(tp_, index=False)
+    return n_
+if TS_BACKFILL_MINUTES > 0:
+    try:
+        n_bf_ = _ts_backfill(list(EURO_CODES), TS_BACKFILL_MINUTES)
+        if n_bf_:
+            print(f"ESPN team statistics: cards added for {n_bf_} earlier European matches (continues next run if any are left).")
+    except Exception as e_:
+        print("ESPN cards backfill skipped:", str(e_)[:80])
+
 # v30: ESPN's team statistics (kept by the lineup download) for every ESPN league, in our team names
-for code_, league_ in ESPN_LEAGUES.items():
+# v35: linked to our results by ESPN's match id (domestic links and the European cups), so every competition counts;
+#      corners, cards, shots and fouls are kept too (TS_EXTRA), for the cups and leagues football-data.co.uk doesn't cover
+_ev_names = {}
+if "links" in globals() and len(links):
+    for r_ in links.itertuples():
+        _ev_names[str(r_.event_id)] = (r_.League, pd.Timestamp(r_.Date).normalize(), r_.HomeTeam, r_.AwayTeam)
+for fr_ in (euro, euro_up if "euro_up" in globals() else pd.DataFrame()):
+    if len(fr_) and "event_id" in fr_:
+        for r_ in fr_.itertuples():
+            _ev_names.setdefault(str(r_.event_id), (r_.Competition, pd.Timestamp(r_.Date).normalize(), r_.HomeTeam, r_.AwayTeam))
+TS_COLS = {"wonCorners": ("HC", "AC"), "yellowCards": ("HY", "AY"), "redCards": ("HR", "AR"), "totalShots": ("HS", "AS"), "shotsOnTarget": ("HST", "AST"),
+           "foulsCommitted": ("HF", "AF"), "totalTackles": ("HTK", "ATK"), "offsides": ("HO", "AO")}
+ts_rows_ = []
+for code_ in list(ESPN_LEAGUES) + list(ESPN_EXTRA_LEAGUES) + list(EURO_CODES):
     tp_ = f"{SAVE_DIR}/lineups/{code_}_teamstats.csv"
     if not os.path.exists(tp_):
         continue
     ts_ = checked_read(tp_, text=("event_id", "team_id", "team", "side", "comp"), num=("totalTackles", "offsides"), name=f"{code_}_teamstats")
     ts_ = ts_.drop_duplicates(["event_id", "team_id"])
+    for c_ in TS_COLS:
+        ts_[c_] = pd.to_numeric(ts_.get(c_), errors="coerce")
     for ev_id, gg in ts_.groupby("event_id"):
         if len(gg) != 2:
             continue
@@ -62,12 +116,25 @@ for code_, league_ in ESPN_LEAGUES.items():
         if h_.empty or a_.empty:
             continue
         h_, a_ = h_.iloc[0], a_.iloc[0]
-        hn, an = team_map.get((league_, h_["team"]), h_["team"]), team_map.get((league_, a_["team"]), a_["team"])
         d_ = pd.Timestamp(h_["date"]).tz_localize(None).normalize() if pd.Timestamp(h_["date"]).tzinfo is None else pd.Timestamp(h_["date"]).tz_convert(None).normalize()
+        if str(ev_id) in _ev_names:
+            league_, d_, hn, an = _ev_names[str(ev_id)]
+        elif code_ in ESPN_LEAGUES:
+            league_ = ESPN_LEAGUES[code_]
+            hn, an = team_map.get((league_, h_["team"]), h_["team"]), team_map.get((league_, a_["team"]), a_["team"])
+        else:
+            continue                                              # not linked to one of our results
         for stat_, col_ in [("offsides", "offsides"), ("tackles", "totalTackles")]:
             if pd.notna(h_.get(col_)) and pd.notna(a_.get(col_)):
                 COUNT_ROWS.append({"League": league_, "Team": hn, "Opp": an, "Date": d_, "is_home": 1, "stat": stat_, "own": float(h_[col_]), "against": float(a_[col_]), "src": "espn"})
                 COUNT_ROWS.append({"League": league_, "Team": an, "Opp": hn, "Date": d_, "is_home": 0, "stat": stat_, "own": float(a_[col_]), "against": float(h_[col_]), "src": "espn"})
+        row_ = {"Comp": league_, "Date": d_, "HomeTeam": hn, "AwayTeam": an, "espn": f"{code_}:{ev_id}"}
+        for c_, (hc_, ac_) in TS_COLS.items():
+            row_[hc_], row_[ac_] = h_.get(c_), a_.get(c_)
+        ts_rows_.append(row_)
+TS_EXTRA = pd.DataFrame(ts_rows_).drop_duplicates(["Date", "HomeTeam", "AwayTeam"]) if ts_rows_ else pd.DataFrame(columns=["Comp", "Date", "HomeTeam", "AwayTeam", "espn"])
+print(f"ESPN team statistics linked to our results: {len(TS_EXTRA)} matches"
+      + (f" ({int(TS_EXTRA['Comp'].isin(list(EURO_CODES.values())).sum())} in the European cups)" if len(TS_EXTRA) else "") + ".")
 COUNT_LONG = (pd.DataFrame(COUNT_ROWS).sort_values(["src"], ascending=False).drop_duplicates(["League", "Team", "Date", "stat"]).sort_values("Date")
               if COUNT_ROWS else pd.DataFrame(columns=["League", "Team", "Opp", "Date", "is_home", "stat", "own", "against", "src"]))
 print(f"Team counts for new markets: " + ", ".join(f"{s_} {int((COUNT_LONG['stat'] == s_).sum())} team-matches" for s_ in ["offsides", "tackles"]))

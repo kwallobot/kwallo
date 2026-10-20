@@ -24,12 +24,14 @@ QUICK = {   # settings switched for the quicker runs (exact text replacements in
     "PITCHAPI_TACTICS_MINUTES = 10": "PITCHAPI_TACTICS_MINUTES = 2",
     "PITCHAPI_SHOTS_MINUTES = 5": "PITCHAPI_SHOTS_MINUTES = 1",
     "time.time() - t0 > 8 * 60": "time.time() - t0 > 1 * 60",
+    "TS_BACKFILL_MINUTES = 4": "TS_BACKFILL_MINUTES = 1",                 # v35
+    "NEWS_RUN_MINUTES = 6": "NEWS_RUN_MINUTES = 3",                       # v35
 }
 MODES = {
     "full": {},
     "daily": dict(QUICK),
     "lineups": {**QUICK, "PREDICT_DAYS = 7": "PREDICT_DAYS = 2", "RUN_BACKTEST = True": "RUN_BACKTEST = False",
-                "LINEUP_RUN_MINUTES = 4": "LINEUP_RUN_MINUTES = 1"},
+                "LINEUP_RUN_MINUTES = 4": "LINEUP_RUN_MINUTES = 1", "TS_BACKFILL_MINUTES = 1": "TS_BACKFILL_MINUTES = 0"},
 }
 ALWAYS = {'SAVE_DIR = "/content/drive/MyDrive/football"': f'SAVE_DIR = {DATA!r}',
           "SHOW_DASHBOARD = True": "SHOW_DASHBOARD = False", "DOWNLOAD_DASHBOARD = True": "DOWNLOAD_DASHBOARD = False"}

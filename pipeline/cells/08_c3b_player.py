@@ -168,7 +168,7 @@ if PLAYER_MODEL and len(lu):
     ap = lu.dropna(subset=["player_id", "team_id"])
     apps = {pid: (grp["date"].values.astype("datetime64[D]"), grp["team_id"].values) for pid, grp in ap.groupby("player_id")}
     # v27: confirmed lineups for fixtures starting soon (published about 75 minutes before kickoff in the Premier League)
-    CONFIRMED = {}
+    CONFIRMED, CONFIRMED_POS = {}, {}
     if CONFIRMED_LINEUPS and len(up_events):
         soon_ = up_events
         if "Kickoff" in up_events:
@@ -188,6 +188,8 @@ if PLAYER_MODEL and len(lu):
                 st_ = set(grp_.loc[grp_["starter"].astype(bool), "player_id"].astype(str))
                 if len(st_) >= 11:
                     CONFIRMED.setdefault(str(t_), {})[str(r_.event_id)] = st_
+                    if "pos" in grp_:                              # v35: each starter's position in this match (for the pitch)
+                        CONFIRMED_POS.update({(str(r_.event_id), str(p_)): str(q_) for p_, q_ in zip(grp_["player_id"], grp_["pos"]) if pd.notna(q_)})
         print(f"Confirmed lineups: {sum(len(v) for v in CONFIRMED.values())} team-sides already announced.")
     feats = pd.concat([team_features(g, forced.get(tid, frozenset()), squads.get(str(tid)), apps, CONFIRMED.get(str(tid))).assign(team_id=tid)
                        for tid, g in allrows.groupby("team_id")], ignore_index=True)
