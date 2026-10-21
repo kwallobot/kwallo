@@ -37,13 +37,14 @@ if len(weekend):
     sim_summary = {"matches": len(weekend), "home": (H > A).sum(axis=0).mean(), "draws": (H == A).sum(axis=0).mean(),
                    "away": (H < A).sum(axis=0).mean(), "goals": total_goals.mean(),
                    "goals_lo": np.percentile(total_goals, 5), "goals_hi": np.percentile(total_goals, 95),
-                   "fav_wins": fav_wins.mean(), "all_fav": 100 * (fav_wins == len(weekend)).mean(), "top": []}
+                   "fav_wins": fav_wins.mean(), "top": []}
     print("\nAcross the whole weekend (per simulated weekend):")
     print(f"  Home wins: {sim_summary['home']:.1f} on average   Draws: {sim_summary['draws']:.1f}   Away wins: {sim_summary['away']:.1f}")
     print(f"  Total goals: {sim_summary['goals']:.0f} on average (90% of simulations between {sim_summary['goals_lo']:.0f} and {sim_summary['goals_hi']:.0f})")
     print(f"  Model's favourite wins in {sim_summary['fav_wins']:.1f} of {len(weekend)} matches on average")
-    print(f"  Chance ALL {len(weekend)} favourites win: {sim_summary['all_fav']:.3f}%")
-    for k in [3, 5]:
+    # v35: how often the 2, 3, 5 and 10 strongest favourites ALL win (an accumulator of the safest picks); the old
+    #      "all favourites win" line was always 0.000% (with 100+ matches it's about 1 in 10^37)
+    for k in [2, 3, 5, 10]:
         if len(weekend) >= k:
             top_k = weekend[["pH", "pD", "pA"]].max(axis=1).nlargest(k).index.values
             chance = 100 * (res[top_k] == fav[top_k][:, None]).all(axis=0).mean()

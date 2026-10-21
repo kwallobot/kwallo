@@ -224,7 +224,8 @@ def _players(ns, data_dir, slug):
     pp["team"] = pp["team"].map(lambda t: pa_to_ours.get(t, t))
     pp["stats"] = pp["stats_json"].map(lambda s: json.loads(s) if isinstance(s, str) and s.startswith("{") else {})
     kind = {k: (v.get("type") or "") for k, v in labels.items()}
-    is_avg = lambda k: kind.get(k) in ("double", "percent", "fraction") or any(w in k for w in ("rating", "percent", "accuracy", "pct"))
+    is_cum = lambda k: k.startswith("expected_") or k.startswith("xg")              # v35: xG and xA add up over matches (decimals, but not averages)
+    is_avg = lambda k: not is_cum(k) and (kind.get(k) in ("double", "percent", "fraction") or any(w in k for w in ("rating", "percent", "accuracy", "pct")))
     def agg(g):
         mins = sum(float(s.get("minutes_played", 0) or 0) for s in g["stats"])
         tot, avg_w = {}, {}

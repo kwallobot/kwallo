@@ -50,12 +50,40 @@ if parts_t:
     TAC_LONG = pd.concat([pd.DataFrame(p_) if isinstance(p_, list) else p_ for p_ in [pd.DataFrame([x for x in parts_t if isinstance(x, dict)])] + [x for x in parts_t if not isinstance(x, dict)]], ignore_index=True)
     TAC_LONG = TAC_LONG.groupby(["Team", "Date"], as_index=False).mean(numeric_only=True).sort_values("Date")
 # v35: cards in ESPN's team statistics (saved from v35 on): fill in the European cups' earlier matches, newest first, time-limited
-TS_BACKFILL_MINUTES = 4
+TS_BACKFILL_MINUTES = 8
+TS_COLS_SAVED = ["totalTackles", "effectiveTackles", "offsides", "interceptions", "possessionPct", "totalShots", "shotsOnTarget", "wonCorners",
+                 "foulsCommitted", "totalPasses", "yellowCards", "redCards"]
+def _ts_missing(code_, have_, t0_, minutes_):
+    """v35: team statistics for cup matches downloaded before v30 (when they weren't saved yet), newest first."""
+    comp_ = EURO_CODES.get(code_)
+    if not comp_ or not len(euro) or "event_id" not in euro:
+        return []
+    e_ = euro[(euro["Competition"] == comp_) & ~euro["event_id"].astype(str).isin(have_)].sort_values("Date", ascending=False)
+    rows_ = []
+    for r_ in e_.itertuples():
+        if time.time() - t0_ > minutes_ * 60:
+            break
+        s_ = espn_get(f"{ESPN_BASE}/{code_}/summary?event={r_.event_id}", pause=0.3) or {}
+        for tm_ in (s_.get("boxscore") or {}).get("teams") or []:
+            st_ = {x_.get("name"): x_.get("displayValue") for x_ in tm_.get("statistics") or []}
+            if st_:
+                rows_.append({"event_id": str(r_.event_id), "date": str(pd.Timestamp(r_.Date))[:10], "comp": code_, "team_id": str((tm_.get("team") or {}).get("id")),
+                              "team": (tm_.get("team") or {}).get("displayName"), "side": tm_.get("homeAway"),
+                              **{k_: st_.get(k_, "na" if k_ in ("yellowCards", "redCards") else None) for k_ in TS_COLS_SAVED}})
+    return rows_
 def _ts_backfill(codes_, minutes_):
     t0_, n_ = time.time(), 0
     for code_ in codes_:
         tp_ = f"{SAVE_DIR}/lineups/{code_}_teamstats.csv"
-        if not os.path.exists(tp_) or time.time() - t0_ > minutes_ * 60:
+        if time.time() - t0_ > minutes_ * 60:
+            continue
+        have_ = set(pd.read_csv(tp_, dtype=str)["event_id"]) if os.path.exists(tp_) else set()
+        add_ = _ts_missing(code_, have_, t0_, minutes_)
+        if add_:
+            old_ = pd.read_csv(tp_, dtype=str) if os.path.exists(tp_) else pd.DataFrame()
+            pd.concat([old_, pd.DataFrame(add_)], ignore_index=True).to_csv(tp_, index=False)
+            n_ += len({r_["event_id"] for r_ in add_})
+        if not os.path.exists(tp_):
             continue
         ts_ = pd.read_csv(tp_, dtype=str)
         for c_ in ("yellowCards", "redCards"):
@@ -83,7 +111,7 @@ if TS_BACKFILL_MINUTES > 0:
     try:
         n_bf_ = _ts_backfill(list(EURO_CODES), TS_BACKFILL_MINUTES)
         if n_bf_:
-            print(f"ESPN team statistics: cards added for {n_bf_} earlier European matches (continues next run if any are left).")
+            print(f"ESPN team statistics: {n_bf_} earlier European cup matches filled in (statistics and cards; continues next run if any are left).")
     except Exception as e_:
         print("ESPN cards backfill skipped:", str(e_)[:80])
 
