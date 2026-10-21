@@ -61,7 +61,7 @@ def preview_text(d, site):
     if xi:
         lines += [f"Expected XI {html.escape(m['Home'])}: {html.escape(_xi_line(xi, 'home'))}", f"Expected XI {html.escape(m['Away'])}: {html.escape(_xi_line(xi, 'away'))}"]
     if site:
-        lines.append(f'<a href="{site.rstrip("/")}/match/{m["slug"]}">Full preview</a>')
+        lines.append(f'<a href="{site.rstrip("/")}/#/match/{m["slug"]}">Full preview</a>')     # v35: the site's pages live after "#/"
     lines.append("<i>Kwallo · football, decoded. Model probabilities, not guarantees. 18+.</i>")
     return "\n".join(lines)
 
@@ -78,7 +78,7 @@ def lineups_text(d, site):
     if m.get("kickoff"):
         lines.append(f"Kickoff {m['kickoff'][11:16]} UTC")
     if site:
-        lines.append(f'<a href="{site.rstrip("/")}/match/{m["slug"]}">Match page</a>')
+        lines.append(f'<a href="{site.rstrip("/")}/#/match/{m["slug"]}/lineups">Match page</a>')
     return "\n".join(lines)
 
 def send(ns, data_dir, mode):

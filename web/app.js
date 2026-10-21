@@ -158,11 +158,15 @@
     setNav("today");
     const idx = await get("index.json");
     const ms = idx.matches || [];
-    const days = [...new Set(ms.map(matchDay))].sort();
-    if (!days.length) { app.innerHTML = `<h1>Today</h1>` + empty("No fixtures in the next few days. New fixtures appear after the morning update."); return; }
     const today = localDay(Date.now());
-    day = day && days.includes(day) ? day : (days.includes(today) ? today : days[0]);
+    // v35: the last 7 days as tabs too (results, and what Kwallo predicted), and a date picker back to the 2025/26 season
+    const past7 = [...Array(7)].map((_, i) => localDay(Date.now() - (7 - i) * 864e5));
+    const days = [...new Set([...past7, today, ...ms.map(matchDay).filter(d => d >= today)])].sort();
+    day = day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : today;
     filter = filter || "all";
+    const dayTabs = (days.includes(day) ? days : [...days, day].sort()).map(d => `<button class="${d === day ? "on" : ""}" data-go="#/day/${d}/${filter}">${esc(dayLabel(d))}</button>`).join("");
+    const picker = `<label class="datepick" title="Pick a date">📅 <input type="date" data-datepick min="${PAST_FROM}" max="${days[days.length - 1]}" value="${day}" aria-label="Pick a date"></label>`;
+    if (day < today) return pagePastDay(day, filter, dayTabs, picker);
     const favs = new Set(fav.list());
     let list = ms.filter(m => matchDay(m) === day);
     await getLive();
@@ -177,11 +181,46 @@
     const order = Object.keys(groups).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
     const f = (k, l) => `<button class="chip ${filter === k ? "on" : ""}" data-go="#/day/${day}/${k}">${l}</button>`;
     app.innerHTML = `<h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} match${list.length === 1 ? "" : "es"}.</p>
-      <div class="tabs" role="tablist">${days.map(d => `<button class="${d === day ? "on" : ""}" data-go="#/day/${d}/${filter}">${esc(dayLabel(d))}</button>`).join("")}</div>
+      <div class="daybar"><div class="tabs" role="tablist" data-daytabs>${dayTabs}</div>${picker}</div>
       <div class="tabs">${f("all", "All")}${f("live", `● Live${Object.values(LIVE).some(x => x.state === "in") ? ` (${ms.filter(m => (LIVE[m.slug] || {}).state === "in").length})` : ""}`)}${f("big", "Big games")}${f("europe", "Europe")}${f("nigeria", "Nigeria")}${f("fav", "★ Favourites")}</div>
       ${order.length ? order.map(c => compCard("day:" + c, c, REGION[c], groups[c].length, groups[c].map(matchRow).join(""), false)).join("")
         : empty(filter === "fav" ? "None of your favourites play on this day. Tap ★ on a match, or on a team in its match page." : filter === "live" ? "No matches in play right now." : "No matches for this filter on this day.")}
       <p class="small muted">Updated ${idx.meta && idx.meta.updated ? esc(new Date(idx.meta.updated).toLocaleString()) : "recently"}. Chances are the model's; fair odds are the break-even price.</p>`;
+    afterRender = () => { const b = shell.querySelector("[data-daytabs] button.on"), bar = shell.querySelector("[data-daytabs]"); if (b && bar) bar.scrollLeft = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2); };   // v35: today in view
+  }
+
+  const PAST_FROM = "2025-07-01";
+  // v35: a past day: every result in our competitions, with Kwallo's pre-match chances and top angle (✓ / ✗) where we had them
+  async function pagePastDay(day, filter, dayTabs, picker) {
+    let D = null;
+    try { D = await get(`days/${day}.json`); } catch (e) {}
+    const favs = new Set(fav.list());
+    let list = ((D || {}).matches || []).map(x => ({ ...x, Competition: x.competition }));
+    if (filter === "big") list = list.filter(m => BIG.includes(m.Competition));
+    if (filter === "europe") list = list.filter(m => EUROPE_CUPS.includes(m.Competition));
+    if (filter === "nigeria") list = list.filter(m => /NPFL/.test(m.Competition));
+    if (filter === "fav") list = list.filter(m => favs.has("team:" + m.home_slug) || favs.has("team:" + m.away_slug) || favs.has("comp:" + m.league_slug));
+    const groups = {};
+    list.forEach(m => (groups[m.Competition] = groups[m.Competition] || []).push(m));
+    const rank = c => (BIG.indexOf(c) + 1) || 99;
+    const order = Object.keys(groups).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    const row = x => {
+      const line = (side, name, sc, won) => `<span class="mt">${badge({ Home: x.home, Away: x.away }, side)}<span class="tn">${won ? `<b>${esc(name)}</b>` : esc(name)}</span><b class="msc">${sc}</b></span>`;
+      const p = x.pred, t = x.top;
+      const note = [p ? `Kwallo: ${pct(p.pH)} · draw ${pct(p.pD)} · ${pct(p.pA)}` : "", t ? `top angle: ${esc(t.bet)} ${t.won === true ? '<span class="won">✓</span>' : t.won === false ? '<span class="lost">✗</span>' : ""}` : ""].filter(Boolean).join(", ");
+      const inner = `<span class="mtime num"><span class="muted">FT</span></span><span class="mteams">${line("home", x.home, x.hs, x.hs > x.as)}${line("away", x.away, x.as, x.as > x.hs)}
+        ${note ? `<span class="md small muted">${note}</span>` : ""}</span><span></span>`;
+      return x.espn ? `<a class="mrow" href="#/result/${encodeURIComponent(x.espn)}/${day}">${inner}</a>` : `<div class="mrow">${inner}</div>`;
+    };
+    const f = (k, l) => `<button class="chip ${filter === k ? "on" : ""}" data-go="#/day/${day}/${k}">${l}</button>`;
+    app.innerHTML = `<h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} result${list.length === 1 ? "" : "s"}.</p>
+      <div class="daybar"><div class="tabs" role="tablist" data-daytabs>${dayTabs}</div>${picker}</div>
+      <div class="tabs">${f("all", "All")}${f("big", "Big games")}${f("europe", "Europe")}${f("nigeria", "Nigeria")}${f("fav", "★ Favourites")}</div>
+      ${order.length ? order.map(c => compCard("day:" + c, c, REGION[c], groups[c].length, groups[c].map(row).join(""), false)).join("")
+        : empty(D ? "No results for this filter on this day." : day < PAST_FROM ? "Results go back to the start of the 2025/26 season." : "No results on this day.")}
+      <p class="small muted">Tap a match for its statistics, timeline and lineups. ✓ / ✗ shows whether Kwallo's top angle for the match came in.</p>`;
+    afterRender = () => { const b = shell.querySelector("[data-daytabs] button.on"), bar = shell.querySelector("[data-daytabs]"); if (b && bar) bar.scrollLeft = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2); };
+    hit("past_day");
   }
 
   async function pageLeagues() {
@@ -397,7 +436,7 @@
         <div class="stat-grid two"><div><h3>${esc(H)}</h3>${list(S.home, hsl)}</div><div><h3>${esc(A)}</h3>${list(S.away, asl)}</div></div>`;
     }
     const side = s => L.find(l => l.side === s) || {};
-    const asXI = l => ({ ours: (l.xi || []).map(p => ({ Player: p.name, Pos: p.pos, Line: posLine(p.pos), p: 1, id: p.id })), confirmed: true });
+    const asXI = l => ({ ours: (l.xi || []).map(p => ({ Player: p.name, Pos: p.pos, Line: posLine(p.pos), p: 1, id: p.id })), confirmed: true, formation: l.formation });
     const ev = p => `${"⚽".repeat(Math.min(p.goals || 0, 4))}${p.yellow ? '<i class="cardi y"></i>' : ""}${p.red ? '<i class="cardi r"></i>' : ""}`;
     const block = (s, ts) => { const l = side(s), co = (coach || {})[s];
       const used = (l.bench || []).filter(p => p.on != null), unused = (l.bench || []).filter(p => p.on == null);
@@ -676,7 +715,9 @@
       ${empty("Detailed statistics aren't available for this player yet.")}${tb}`;
   }
   // v35: a past match: score, statistics, goals and cards, lineups (ESPN, through the Worker)
-  async function pageResult(e) {
+  async function pageResult(e, date) {
+    let P = null;                                                     // v35: what Kwallo said before kickoff (from that day's results file)
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { try { P = ((await get(`days/${date}.json`)).matches || []).find(x => x.espn === e) || null; } catch (err) {} }
     setNav("today");
     const R = await getJSON(workerApi(`result?e=${encodeURIComponent(e)}`));
     const T = R.teams || [], H = T.find(t => t.side === "home") || T[0] || {}, A = T.find(t => t.side === "away") || T[1] || {};
@@ -685,6 +726,9 @@
     app.innerHTML = `${backBar()}<section class="hero"><p class="meta">${esc(R.competition)}${R.date ? `, ${esc(longDate(R.date))}` : ""}${R.venue ? ` · ${esc(R.venue)}` : ""}</p>
         <div class="mhead"><span></span><div class="mside"><b>${esc(H.name)}</b></div><div class="mcentre num"><b class="score">${esc(H.score ?? "–")}–${esc(A.score ?? "–")}</b>
           <span class="muted">${esc(R.status || "")}</span></div><div class="mside"><b>${esc(A.name)}</b></div><span></span></div></section>
+      ${P && (P.pred || P.top) ? `<section class="scard kpred"><h3>Kwallo's prediction before kick-off</h3>
+        ${P.pred ? `${chanceBar(P.pred, [H.name, A.name])}<div class="bar-legend num"><span><b>${pct(P.pred.pH)}</b>${esc(H.name)}</span><span><b>${pct(P.pred.pD)}</b>Draw</span><span style="text-align:right"><b>${pct(P.pred.pA)}</b>${esc(A.name)}</span></div>` : ""}
+        ${P.top ? `<p>Top angle: <b>${esc(P.top.bet)}</b>${P.top.p != null ? ` (${pct(P.top.p)})` : ""} ${P.top.won === true ? '<span class="won">✓ came in</span>' : P.top.won === false ? '<span class="lost">✗ missed</span>' : ""}</p>` : ""}</section>` : ""}
       ${momentumCard(R, H.name, A.name)}${timelineCard(R, H.name, A.name)}
       ${R.card ? `<h2>Match stats</h2>${statsCard(R.card, H.name, A.name, !R.completed)}`
         : (R.stats || []).length ? `<h2>Match stats</h2><div class="wrap"><table class="mstats"><tbody>${R.stats.map(s => `<tr><td class="r num"><b>${esc(s.home)}</b></td><td class="c">${esc(s.label)}${bar(s)}</td><td class="num"><b>${esc(s.away)}</b></td></tr>`).join("")}</tbody></table></div>` : ""}
@@ -802,6 +846,19 @@
       ${(t.spotted || []).length ? `<ul class="list small">${t.spotted.slice(0, 5).map(s => `<li>${esc(typeof s === "string" ? s : (s.pattern ? `${s.pattern}: ${s.count} of the last ${s.of}${s.base != null ? `, league usually ${pct(s.base)}` : ""}` : JSON.stringify(s)))}</li>`).join("")}</ul>` : ""}`;
   }
   const POS = [["G", "Goalkeeper"], ["D", "Defenders"], ["M", "Midfielders"], ["F", "Forwards"]];
+  const posDepth = pos => { const c = String(pos || "").toUpperCase().trim(), b = c.split("-")[0];   // v35: how far forward a position plays
+    if (["G", "GK"].includes(b)) return 0;
+    if (["CB", "CD", "SW", "LCB", "RCB", "D", "DF"].includes(b)) return 1;
+    if (["LB", "RB"].includes(b)) return 1.1;
+    if (["LWB", "RWB", "WB"].includes(b)) return 1.6;
+    if (["DM", "CDM"].includes(b)) return 2;
+    if (["CM", "LCM", "RCM", "M", "MF"].includes(b)) return 2.5;
+    if (["LM", "RM"].includes(b)) return 2.6;
+    if (["AM", "CAM", "LAM", "RAM"].includes(b)) return 3.2;
+    if (["LW", "RW", "W"].includes(b)) return 3.4;
+    if (b === "CF" && /-[LR]$/.test(c)) return 3.6;
+    if (["F", "FW", "ST", "CF", "S", "SS", "LF", "RF"].includes(b)) return 4;
+    return 2.5; };
   // v34: the lineup on a pitch. Home in the bottom half, away in the top half; each line ordered left to right by position code
   const sideRank = pos => { const c = String(pos || "").toUpperCase().trim();      // wide left 0, left of centre 1, centre 2, right of centre 3, wide right 4
     if (/-L$/.test(c)) return 1; if (/-R$/.test(c)) return 3; if (/^L/.test(c)) return 0; if (/^R/.test(c)) return 4; return 2; };
@@ -809,15 +866,29 @@
   //      every player links to his page
   function pitchSVG(home, away, H, A, cHome, cAway, hs, as) {
     const W = 340, Hh = 520;
-    const lines = (e, mirror) => { const g = { G: [], D: [], M: [], F: [] };
-      ((e && e.ours) || []).forEach(p => { const k = p.Line || "M"; (g[k] || g.M).push(p); });
-      const rk = p => (mirror ? 4 - sideRank(p.Pos) : sideRank(p.Pos));
-      Object.values(g).forEach(arr => arr.sort((x, y) => rk(x) - rk(y))); return g; };
-    const formation = g => [g.D.length, g.M.length, g.F.length].filter(n => n).join("-");
+    // v35: drawn in the team's formation (e.g. 3-4-2-1 = back three, four, two attacking midfielders, one striker): outfield players are
+    //      ordered from deepest to most advanced by their usual position and dealt into the formation's rows. Without a formation, by line,
+    //      with ESPN's CF-L / CF-R beside a central striker counted as attacking midfielders.
+    const lines = (e, mirror) => {
+      const ps = (e && e.ours) || [], rk = p => (mirror ? 4 - sideRank(p.Pos) : sideRank(p.Pos));
+      const gk = ps.filter(p => (p.Line || posLine(p.Pos)) === "G"), out = ps.filter(p => !gk.includes(p));
+      const f = String((e && e.formation) || "").split("-").map(Number);
+      let rows;
+      if (f.length >= 2 && f.every(n => n > 0) && f.reduce((a, b) => a + b, 0) === out.length) {
+        const sorted = out.map((p, i) => ({ p, i })).sort((a, b) => posDepth(a.p.Pos) - posDepth(b.p.Pos) || a.i - b.i).map(x => x.p);
+        let k = 0; rows = f.map(n => sorted.slice(k, (k += n)));
+      } else {
+        const hasNine = out.some(p => /^(F|CF|ST|FW)$/i.test(String(p.Pos || "").trim()));
+        const ln = p => (hasNine && /^CF-[LR]$/i.test(String(p.Pos || "").trim())) ? "M" : (p.Line || posLine(p.Pos));
+        rows = ["D", "M", "F"].map(k => out.filter(p => ln(p) === k)).filter(r => r.length);
+      }
+      rows = [gk, ...rows].map(r => r.slice().sort((x, y) => rk(x) - rk(y)));
+      return { rows, label: f.length >= 2 && f.every(n => n > 0) && f.reduce((a, b) => a + b, 0) === out.length ? f.join("-") : rows.slice(1).map(r => r.length).join("-") };
+    };
+    const formation = g => g.label;
     const dots = (g, top, color, ts) => {
-      const rows = ["G", "D", "M", "F"];
-      const yOf = { G: top ? 34 : Hh - 34, D: top ? 92 : Hh - 92, M: top ? 160 : Hh - 160, F: top ? 222 : Hh - 222 };
-      return rows.map(k => g[k].map((p, i, arr) => { const x = (W / (arr.length + 1)) * (i + 1), y = yOf[k], op = p.p != null ? Math.max(0.35, Math.min(1, p.p)) : 1;
+      const n = g.rows.length - 1, ys = [34, ...[...Array(n)].map((_, i) => n === 1 ? 160 : 90 + (i * (230 - 90)) / (n - 1))];
+      return g.rows.map((row, r) => row.map((p, i, arr) => { const x = (W / (arr.length + 1)) * (i + 1), y = Math.round(top ? ys[r] : Hh - ys[r]), op = p.p != null ? Math.max(0.35, Math.min(1, p.p)) : 1;
         const sur = String(p.Player || "").split(" ").slice(-1)[0];
         return `<a href="${playerHref(ts, p.Player, p.id)}" aria-label="${esc(p.Player)}"><g opacity="${op.toFixed(2)}"><circle cx="${x.toFixed(1)}" cy="${y}" r="13" fill="${color}" stroke="#fff" stroke-width="1.5"/>
           <text x="${x.toFixed(1)}" y="${y + 27}" text-anchor="middle" class="pn">${esc(sur.slice(0, 12))}</text>
@@ -882,7 +953,7 @@
         case "team": await pageTeam(parts[1]); break;
         case "player": await pagePlayer(parts[1], parts[2]); break;
         case "pf": await pageFindPlayer(parts[1], parts[2], parts[3]); break;          // v35
-        case "result": await pageResult(parts[1]); break;                              // v35
+        case "result": await pageResult(parts[1], parts[2]); break;                    // v35 (date: to show Kwallo's prediction)
         case "angles": await pageAngles(); break;
         case "acca": pageAcca(); break;
         case "track": await pageTrack(); break;
@@ -954,6 +1025,7 @@
       store.set("leaders_sort2:" + el.dataset.leadersSort, [el.value, el.value === "minutes" || avg ? "total" : "p90", -1]); route(); hit("leaders_sort");
     }
     if (el.matches("[data-leaders-min]")) { store.set("leaders_min", Number(el.value)); route(); }
+    if (el.matches("[data-datepick]") && /^\d{4}-\d{2}-\d{2}$/.test(el.value)) { hit("date_picker"); location.hash = `#/day/${el.value}/all`; }   // v35
   });
   document.querySelectorAll(".tg-channel").forEach(x => { if (C.channel) x.href = tg(C.channel); else x.remove(); });
   document.querySelectorAll(".tg-bot").forEach(x => { if (C.bot) x.href = tg(C.bot); else x.remove(); });

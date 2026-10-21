@@ -1,5 +1,6 @@
 # ===================== 6b. TEAM NEWS (v35): injuries, suspensions and doubts from ESPN's match news, read by Claude =====================
-# For each match in the next 3 days, ESPN's match page lists its news (previews, press-conference quotes, injury updates). Claude Haiku
+# For each match in the next 3 days, ESPN's match page and both clubs' news pages list the news (previews, press-conference quotes,
+# training reports, injury updates). Claude Haiku
 # reads the headlines and summaries and names the players the news rules out or calls doubtful, chosen only from that club's own
 # recent squad (so it can't invent names). Results are cached per match and only re-read when the news changes.
 # Needs an Anthropic API key as ANTHROPIC_API_KEY (GitHub secret); without it this section is skipped and nothing else changes.
@@ -59,6 +60,7 @@ else:
         recent_ = lu_[pd.to_datetime(lu_["date"]) >= TODAY - pd.Timedelta(days=90)] if len(lu_) else lu_
         names_by_team_ = recent_.groupby(recent_["team_id"].astype(str))["player"].apply(lambda s_: sorted(set(map(str, s_.dropna())))).to_dict() if len(recent_) else {}
         t0_, n_read, n_flag, n_new = time.time(), 0, 0, 0
+        club_news_ = {}
         for code_, eid_, comp_, date_, home_, away_, hid_, aid_ in ev_rows_:
             if time.time() - t0_ > NEWS_RUN_MINUTES * 60:
                 print("  Team news: time limit reached; the rest continue next run.")
@@ -68,7 +70,16 @@ else:
                 continue
             s_ = espn_get(f"{ESPN_BASE}/{code_}/summary?event={eid_}", pause=0.3) or {}
             arts_ = ((s_.get("news") or {}).get("articles") or [])[:12]
-            text_ = "\n".join(f"- {a_.get('headline', '')}: {a_.get('description', '')}" for a_ in arts_ if a_.get("headline"))
+            # v35: each club's own news page too (training reports, press conferences), last 7 days, cached per club for this run
+            for t_id_ in (hid_, aid_):
+                if t_id_ and t_id_ not in club_news_:
+                    club_news_[t_id_] = (espn_get(f"{ESPN_BASE}/{code_}/news?team={t_id_}&limit=12", pause=0.3) or {}).get("articles") or []
+                arts_ = arts_ + [a_ for a_ in club_news_.get(t_id_, []) if str(a_.get("published", ""))[:10] >= (TODAY - pd.Timedelta(days=7)).strftime("%Y-%m-%d")]
+            seen_h_, uniq_ = set(), []
+            for a_ in arts_:
+                if a_.get("headline") and a_["headline"] not in seen_h_:
+                    seen_h_.add(a_["headline"]); uniq_.append(a_)
+            text_ = "\n".join(f"- {a_.get('headline', '')}: {a_.get('description', '')}" for a_ in uniq_[:30])
             if not text_:
                 continue
             h_ = hashlib.md5((text_ + "|".join(sq_["home"] + sq_["away"])).encode()).hexdigest()

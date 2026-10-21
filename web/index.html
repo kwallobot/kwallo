@@ -6,15 +6,17 @@
 <title>Kwallo: football, decoded.</title>
 <meta name="description" content="Match predictions with honest probabilities and fair odds, lineups, player statistics and a public track record, across 30+ competitions.">
 <meta name="theme-color" content="#0B201B">
-<link rel="icon" href="logo.svg" type="image/svg+xml">
+<script>/* v35: links like /match/<slug> (without "#") open the right page: rewrite to /#/match/<slug> before anything loads */
+  (function () { var p = location.pathname.replace(/\/+$/, ""); if (p && p !== "/index.html" && /^\/(match|day|team|player|comp|result|leagues|angles|track|acca|more|fav)(\/|$)/.test(p)) { location.replace("/#" + p + location.search); } })();</script>
+<link rel="icon" href="/logo.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
-<script src="config.js"></script>
+<link rel="stylesheet" href="/style.css">
+<script src="/config.js"></script>
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="#/" aria-label="Kwallo: football, decoded. Home"><img src="logo.svg" alt="" width="36" height="36">
+  <a class="brand" href="#/" aria-label="Kwallo: football, decoded. Home"><img src="/logo.svg" alt="" width="36" height="36">
     <span class="wordmark"><span>kwallo</span><small>football, decoded.</small></span></a>
   <nav class="rail" aria-label="Main">
     <a href="#/" data-nav="today">Today</a><a href="#/leagues" data-nav="leagues">Leagues</a><a href="#/angles" data-nav="angles">Best angles</a>
@@ -34,6 +36,6 @@
   <a href="#/" data-nav="today">Today</a><a href="#/leagues" data-nav="leagues">Leagues</a><a href="#/angles" data-nav="angles">Angles</a>
   <a href="#/acca" data-nav="acca">Acca <b class="acca-count" hidden></b></a><a href="#/track" data-nav="track">Record</a><a href="#/more" data-nav="more">More</a>
 </nav>
-<script src="app.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

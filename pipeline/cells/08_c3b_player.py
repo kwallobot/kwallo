@@ -190,6 +190,8 @@ if PLAYER_MODEL and len(lu):
                     CONFIRMED.setdefault(str(t_), {})[str(r_.event_id)] = st_
                     if "pos" in grp_:                              # v35: each starter's position in this match (for the pitch)
                         CONFIRMED_POS.update({(str(r_.event_id), str(p_)): str(q_) for p_, q_ in zip(grp_["player_id"], grp_["pos"]) if pd.notna(q_)})
+                    if "formation" in grp_ and grp_["formation"].notna().any():   # v35: and the formation on the team sheet
+                        CONFIRMED_POS[(str(r_.event_id), "formation", str(t_))] = str(grp_["formation"].dropna().iloc[0])
         print(f"Confirmed lineups: {sum(len(v) for v in CONFIRMED.values())} team-sides already announced.")
     feats = pd.concat([team_features(g, forced.get(tid, frozenset()), squads.get(str(tid)), apps, CONFIRMED.get(str(tid))).assign(team_id=tid)
                        for tid, g in allrows.groupby("team_id")], ignore_index=True)

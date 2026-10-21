@@ -3,11 +3,12 @@
 # balls per pass), set-piece share of xG, touches in the opposition box, pressing (tackles + interceptions per opponent pass),
 # back-three formations (PitchAPI), and pressing intensity PPDA / deep completions (Understat, big five). Manager changes from
 # BSD's coach records. Tested on goals first; all of it also feeds the machine-learning layer (section 9c).
-import joblib
+import joblib, re
 TAC_LONG = pd.DataFrame(columns=["Team", "Date"])
 inv_pa = {f"{c}:{n}": our for our, (c, n) in {**PA_XG_LEAGUES, **PA_TACTIC_LEAGUES}.items()} if "PA_XG_LEAGUES" in globals() else {}
 inv_pa.update({k_: v_[0] for k_, v_ in (PA_CUP_TACTICS.items() if "PA_CUP_TACTICS" in globals() else [])})     # v35: the European cups (throw-ins)
 parts_t, THROW_ROWS, COUNT_ROWS = [], [], []
+TEAM_FORM_PA = {}                                          # v35: our team name -> (date, formation) from PitchAPI
 if len(PA_TACTICS):
     for key_, g_ in PA_TACTICS.groupby("league"):
         our = inv_pa.get(key_)
@@ -24,6 +25,10 @@ if len(PA_TACTICS):
             for i_, team_, opp_i, form_ in [(0, r_.home, 1, r_.f_home), (1, r_.away, 0, r_.f_away)]:
                 if team_ not in mp_:
                     continue
+                if isinstance(form_, str) and re.match(r"^\d(-\d)+$", form_.strip()):    # v35: each team's latest formation, for the pitch
+                    d_f = pd.Timestamp(r_.date)
+                    if mp_[team_] not in TEAM_FORM_PA or d_f > TEAM_FORM_PA[mp_[team_]][0]:
+                        TEAM_FORM_PA[mp_[team_]] = (d_f, form_.strip())
                 opp_name = r_.away if i_ == 0 else r_.home
                 for stat_, key_ in [("offsides", "Offsides"), ("tackles", "matchstats.headers.tackles")]:          # v30
                     if pd.notna(gv(key_, i_)) and opp_name in mp_:

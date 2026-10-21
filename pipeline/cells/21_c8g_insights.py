@@ -728,10 +728,20 @@ if PLAYER_MODEL and len(lu):
     for pid_, q_ in _st.groupby("player_id")["pos"].agg(lambda s: s.astype(str).str.upper().mode().iloc[0] if len(s) else None).items():
         if pid_ in pname_ and q_:
             pname_[pid_]["pos"] = q_
-    XI_BOUNDS = {"G": (1, 1), "D": (3, 5), "M": (2, 6), "F": (1, 4)}
+    # v35: only the goalkeeper is enforced (exactly one). Earlier this also forced 3-5 defenders / 2-6 midfielders / 1-4 forwards, which
+    #      pulled in unlikely players when ESPN codes a team's front players as attacking midfielders (Mount at 16% "up front" for
+    #      Man United). The shape on the pitch now comes from the team's formation instead (see "formation" below).
+    XI_BOUNDS = {"G": (1, 1), "D": (0, 11), "M": (0, 11), "F": (0, 11)}
+    TEAM_FORM_ESPN = {}                                    # ESPN team id -> (date, formation), from the team sheets we hold
+    if "formation" in L:
+        fl_ = L[L["formation"].notna() & L["starter"].astype(bool)].sort_values("date").drop_duplicates("team_id", keep="last")
+        TEAM_FORM_ESPN = {str(t_): (pd.Timestamp(d_), str(f_)) for t_, d_, f_ in zip(fl_["team_id"], fl_["date"], fl_["formation"])}
+    def team_formation(tid_, team_):
+        """The team's most recent formation: ESPN's team sheets or PitchAPI's records, whichever is newer."""
+        c_ = [x_ for x_ in (TEAM_FORM_ESPN.get(str(tid_)), (globals().get("TEAM_FORM_PA") or {}).get(team_)) if x_]
+        return max(c_, key=lambda x_: x_[0])[1] if c_ else None
     def balance_xi(chosen_, probs_, pool_):
-        """v35: a playable shape: one goalkeeper, 3-5 defenders, 2-6 midfielders, 1-4 forwards. Swaps the least likely starter of a crowded
-        line for the likeliest player left of a short one (the model's own picks otherwise stay)."""
+        """v35: exactly one goalkeeper: swaps a second keeper for the likeliest outfield player left (or adds the likeliest keeper)."""
         ln_ = lambda p_: pname_.get(p_, {}).get("line") or line_of(pname_.get(p_, {}).get("pos"))
         chosen_ = list(chosen_)
         for _ in range(6):
@@ -804,7 +814,9 @@ if PLAYER_MODEL and len(lu):
             if not conf_:
                 chosen = balance_xi(chosen, probs_, list(probs_))
             chosen = sorted(chosen, key=lambda p_: "GDMF".find(line_now(p_)))
-            entry_[side_] = {"ours": [{"Player": pname_.get(p_, {}).get("player", p_), "Pos": pos_of(p_), "Line": line_now(p_), "p": probs_.get(p_, 0.0),
+            form_ = globals().get("CONFIRMED_POS", {}).get((str(conf_ev), "formation", str(tid_))) if conf_ else None
+            entry_[side_] = {"formation": form_ or team_formation(tid_, team_),        # v35: drawn in this shape on the pitch
+                             "ours": [{"Player": pname_.get(p_, {}).get("player", p_), "Pos": pos_of(p_), "Line": line_now(p_), "p": probs_.get(p_, 0.0),
                                        "id": str(p_)}                         # v35: ESPN player id (the website links to the player)
                                       for p_ in chosen], "doubts": [] if conf_ else sorted(missing_names) + news_doubts,
                              "method": "confirmed lineup" if conf_ else names_m[best_m], "rotation": rotation_note, "confirmed": bool(conf_)}

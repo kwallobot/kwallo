@@ -80,6 +80,46 @@ def _rounds(cur, upcoming, slug):
     return rounds, nxt
 
 
+PAST_FROM = "2025-07-01"
+
+
+def _past_days(ns, data_dir, write, slug, clean, comp_names):
+    """v35: one file per date since PAST_FROM with every result in our competitions, and what Kwallo predicted before kickoff
+    (the logged chances, and the top angle with won / lost). Only files whose contents changed are uploaded."""
+    RES = ns.get("RES")
+    if RES is None or not len(RES):
+        return 0
+    r = RES[(RES["Date"] >= pd.Timestamp(PAST_FROM)) & RES["Comp"].isin(comp_names)].dropna(subset=["FTHG", "FTAG"]).copy()
+    if not len(r):
+        return 0
+    key = lambda c, d, h, a: f"{c}|{str(d)[:10]}|{h}|{a}"
+    pred, top = {}, {}
+    pl_p = os.path.join(data_dir, "prediction_log.csv")
+    if os.path.exists(pl_p):
+        pl = pd.read_csv(pl_p, usecols=lambda c: c in ("Competition", "Date", "Home", "Away", "pH", "pD", "pA"))
+        pred = {key(x.Competition, x.Date, x.Home, x.Away): (x.pH, x.pD, x.pA) for x in pl.itertuples()}
+    vl_p = os.path.join(data_dir, "verdict_log.csv")
+    if os.path.exists(vl_p):
+        vl = pd.read_csv(vl_p, usecols=lambda c: c in ("Competition", "Date", "Home", "Away", "kind", "Bet", "p", "won"))
+        vl = vl[vl["kind"] == "best"].drop_duplicates(["Competition", "Date", "Home", "Away"], keep="last")
+        top = {key(x.Competition, x.Date, x.Home, x.Away): {"bet": x.Bet, "p": x.p, "won": None if pd.isna(x.won) else bool(x.won)} for x in vl.itertuples()}
+    n, dates = 0, []
+    for d, g in r.sort_values(["Date", "Comp"]).groupby(r["Date"].dt.strftime("%Y-%m-%d")):
+        rows = []
+        for x in g.itertuples():
+            k = key(x.Comp, d, x.HomeTeam, x.AwayTeam)
+            p = pred.get(k)
+            rows.append({"competition": x.Comp, "league_slug": slug(x.Comp), "home": x.HomeTeam, "away": x.AwayTeam,
+                         "home_slug": slug(x.HomeTeam), "away_slug": slug(x.AwayTeam), "hs": int(x.FTHG), "as": int(x.FTAG),
+                         "espn": x.espn if isinstance(getattr(x, "espn", None), str) and ":" in x.espn else None,
+                         "pred": {"pH": p[0], "pD": p[1], "pA": p[2]} if p and pd.notna(p[0]) else None, "top": top.get(k)})
+        n += write(f"site/days/{d}.json", clean({"date": d, "matches": rows}))
+        dates.append(d)
+    n += write("site/days/index.json", {"from": PAST_FROM, "dates": dates})
+    print(f"Past days: {len(dates)} dates with results since {PAST_FROM} ({len(r)} matches).")
+    return n
+
+
 def _cup_stage(date):
     """v35: the European cups' knockout rounds by date (UEFA's usual calendar): play-offs in February, last 16 in March, and so on."""
     d = pd.Timestamp(date)
@@ -346,6 +386,7 @@ def build(ns, data_dir, mode, write, slug, clean):
         comps.append({"slug": cs, "name": comp, "group": cal_group(comp), "group_name": GROUP_NAMES.get(cal_group(comp)), "upcoming": len(up), "has_table": bool(table)})
     comps.sort(key=lambda c: (GROUP_ORDER.index(c["group"]) if c["group"] in GROUP_ORDER else 9, -c["upcoming"], c["name"]))
     n_files += write("site/competitions.json", comps)
+    n_files += _past_days(ns, data_dir, write, slug, clean, {c["name"] for c in comps})
     # ---------- players (every statistic) and leaders ----------
     players, by_league, labels = _players(ns, data_dir, slug)
     # v32: ESPN-only leagues too (their own leader tables), skipping anyone who already has a PitchAPI page

@@ -84,6 +84,7 @@ def parse_lineups(summary, code, ev):
                          "player_id": p.get("athlete", {}).get("id"), "player": p.get("athlete", {}).get("displayName"),
                          "pos": p.get("position", {}).get("abbreviation"), "starter": bool(p.get("starter")),
                          "sub_in": bool(p.get("subbedIn")), "sub_out": bool(p.get("subbedOut")),
+                         "formation": t.get("formation"),                  # v35: the team's formation that day (e.g. 3-4-2-1), for the pitch
                          **{v: st.get(k) for k, v in STAT_NAMES.items()}})
     return rows
 
@@ -141,7 +142,11 @@ def update_lineups(minutes):
             if out_of_time:
                 break
         if lbuf:
-            pd.DataFrame(lbuf).to_csv(path, mode="a", header=not os.path.exists(path), index=False)
+            new_l = pd.DataFrame(lbuf)
+            if os.path.exists(path) and list(pd.read_csv(path, nrows=0).columns) != list(new_l.columns):
+                pd.concat([pd.read_csv(path, dtype=str), new_l], ignore_index=True).to_csv(path, index=False)   # v35: a column was added (formation)
+            else:
+                new_l.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
         if ebuf:
             pd.DataFrame(ebuf).to_csv(epath, mode="a", header=not os.path.exists(epath), index=False)
         if tbuf:

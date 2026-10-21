@@ -260,3 +260,11 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .rchip { font-weight: 800; font-stretch: 80%; padding: .1rem .4rem; border-radius: 4px; color: #111; font-size: .9rem; }
 .rchip.r1 { background: #3FB37F; } .rchip.r2 { background: #9FD36A; } .rchip.r3 { background: #E9C43B; } .rchip.r4 { background: #E98A3B; }
 .momentum .mnote { text-align: center; margin: 0 0 .5rem; }
+/* v35: past days: day tabs with a date picker, and Kwallo's prediction on a past match */
+.daybar { display: flex; align-items: center; gap: .5rem; }
+.daybar .tabs { flex: 1; min-width: 0; margin: .4rem 0 .6rem; }
+.datepick { flex: none; display: inline-flex; align-items: center; gap: .2rem; border: 1px solid var(--line); border-radius: 999px; padding: .2rem .5rem; cursor: pointer; }
+.datepick input { border: 0; background: transparent; color: var(--ink); font: 600 .85rem var(--font); width: 7.6rem; color-scheme: light dark; }
+.kpred .bar { margin-left: 0; }
+.kpred .bar-legend { margin-left: 0; color: var(--ink); }
+.kpred .bar-legend span b { display: block; font-size: 1.2rem; }
