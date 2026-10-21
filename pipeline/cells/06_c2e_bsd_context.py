@@ -183,6 +183,46 @@ if _BK:
         print(f"  {CTX_STATUS}; referees already appointed for {n_ref_up} upcoming matches.")
 health("BSD context (cups, weather, derbies, referees)", _BK is not None and "not used" not in CTX_STATUS, CTX_STATUS)
 
+# ---------- v35: coaches' names (BSD gives each match's coach ids), for the website's lineups; cached, a few new ones per run ----------
+COACH_NAMES, COACH_OF = {}, {}                      # coach id -> name; our team name -> current coach's name
+CNP = f"{SAVE_DIR}/bsd_coaches.json"
+if _BK and len(CTX_MATCH) and "home_coach" in CTX_MATCH:
+    COACH_NAMES = json.load(open(CNP)) if os.path.exists(CNP) else {}
+    last_ = pd.concat([CTX_MATCH[["HomeTeam", "Date", "home_coach"]].set_axis(["Team", "Date", "coach"], axis=1),
+                       CTX_MATCH[["AwayTeam", "Date", "away_coach"]].set_axis(["Team", "Date", "coach"], axis=1)]).dropna().sort_values("Date").groupby("Team").tail(1)
+    need_ = [str(int(c_)) for c_ in last_["coach"].unique() if str(int(c_)) not in COACH_NAMES][:60]
+    for c_ in need_:
+        js_ = None
+        for path_ in (f"/api/v2/coaches/{c_}/", f"/api/v2/managers/{c_}/"):    # (BSD's coach endpoint; whichever answers)
+            js_ = _bsd(path_)
+            if js_:
+                break
+        COACH_NAMES[c_] = (js_ or {}).get("name") or (js_ or {}).get("full_name") or ""
+    json.dump(COACH_NAMES, open(CNP, "w"))
+    COACH_OF = {t_: COACH_NAMES.get(str(int(c_))) for t_, c_ in zip(last_["Team"], last_["coach"]) if COACH_NAMES.get(str(int(c_)))}
+    print(f"Coaches: names for {len(COACH_OF)} teams ({sum(1 for v_ in COACH_NAMES.values() if v_)} known coaches).")
+
+# ---------- v35: the Egyptian Premier League's kick-off times from BSD, where PitchAPI gives only the date ----------
+if _BK and "EXTRA_FIXTURES" in globals() and len(EXTRA_FIXTURES) and "Kickoff" in EXTRA_FIXTURES:
+    eg_mask = (EXTRA_FIXTURES["League"] == "Egyptian Premier League") & EXTRA_FIXTURES["Kickoff"].isna()
+    if eg_mask.any():
+        try:
+            egl_ = [l_ for l_ in (lg_list or []) if "egypt" in json.dumps(l_, default=str).lower()]
+            n_ko = 0
+            for l_ in egl_[:2]:
+                js_ = _bsd("/api/v2/events/", league_id=l_["id"], date_from=f"{TODAY:%Y-%m-%d}", date_to=f"{TODAY + pd.Timedelta(days=PREDICT_DAYS):%Y-%m-%d}", limit=200) or {}
+                for e_ in js_.get("results", []) if isinstance(js_, dict) else []:
+                    if not e_.get("event_date"):
+                        continue
+                    ko_ = pd.Timestamp(e_["event_date"]).tz_convert(None)
+                    for i_ in EXTRA_FIXTURES.index[eg_mask]:
+                        r_ = EXTRA_FIXTURES.loc[i_]
+                        if abs((pd.Timestamp(r_["Date"]) - ko_.normalize()).days) <= 1 and (tsim(r_["HomeTeam"], e_.get("home_team")) + tsim(r_["AwayTeam"], e_.get("away_team"))) / 2 >= 0.7:
+                            EXTRA_FIXTURES.at[i_, "Kickoff"] = ko_; n_ko += 1
+            print(f"Egypt kick-off times from BSD: {n_ko} filled" + ("" if egl_ else " (BSD has no Egyptian league)") + ".")
+        except Exception as e_:
+            print("Egypt kick-off times from BSD: skipped:", str(e_)[:80])
+
 # ---------- v31: the NPFL's current season from BSD (ESPN stopped after May 2026); history before that stays from ESPN ----------
 NPFL_BSD_LEAGUE = 28
 if INCLUDE_NEW_LEAGUES and _BK:

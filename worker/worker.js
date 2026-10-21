@@ -464,6 +464,22 @@ async function liveScores(env, now = Date.now()) {
       out[m.slug] = { state: s.state, detail: s.state === "post" ? "FT" : (/HALFTIME/i.test(s.name) ? "HT" : (s.detail || "")), hs: s.hs, as: s.as };
     }
   }
+  // v35: competitions ESPN doesn't cover (the Egyptian Premier League): full-time scores from PitchAPI, which fills them in at full-time
+  if (env.PITCHAPI_KEY) {
+    const yest = new Date(now - 86400000).toISOString().slice(0, 10);
+    const noEspn = sched.filter(m => !m.espn && (m.kickoff ? Date.parse(m.kickoff) + 105 * 60000 <= now && now - Date.parse(m.kickoff) < 36 * 3600000
+                                                            : m.date && m.date >= yest && m.date <= today));
+    for (const day of [...new Set(noEspn.map(m => String(m.kickoff || m.date).slice(0, 10)))].slice(0, 3)) {
+      let list = [];
+      try { list = ((await pa(env, `/v1/date/${day}`)) || {}).matches || []; } catch (e) {}
+      for (const m of noEspn.filter(x => String(x.kickoff || x.date).slice(0, 10) === day)) {
+        let best = null;
+        for (const p of list) { const s = (teamSim(m.home, (p.home_team || {}).name) + teamSim(m.away, (p.away_team || {}).name)) / 2; if (s >= 0.6 && (!best || s > best.s)) best = { s, p }; }
+        if (best && /finish|ended|^ft$/i.test(String(best.p.status || "")) && best.p.score_home != null && best.p.score_away != null)
+          out[m.slug] = { state: "post", detail: "FT", hs: Number(best.p.score_home), as: Number(best.p.score_away) };
+      }
+    }
+  }
   return out;
 }
 // v35: sends as many queued messages as this minute's request budget allows (goals and full-time first), 10 at a time in parallel.
@@ -570,10 +586,80 @@ async function matchResult(code, id) {
   const events = (s.keyEvents || []).filter(k => /goal|card|penalty|substitut/i.test(String((k.type || {}).text || ""))).map(k => ({
     clock: (k.clock || {}).displayValue || "", type: String((k.type || {}).text || ""), team: (k.team || {}).displayName || "",
     text: k.text || (k.participants || []).map(p => (p.athlete || {}).displayName).filter(Boolean).join(", ") }));
-  const lineups = (s.rosters || []).map(t => ({ side: t.homeAway, team: (t.team || {}).displayName, formation: t.formation || null,
-    xi: (t.roster || []).filter(p => p.starter).map(p => ({ name: (p.athlete || {}).displayName, pos: (p.position || {}).abbreviation || "", id: String((p.athlete || {}).id || "") })) }));
-  return { competition: ((s.header || {}).league || {}).name || "", date: comp.date || null, status: (((comp.status || {}).type) || {}).detail || "",
-           completed: !!((((comp.status || {}).type) || {}).completed), venue: ((s.gameInfo || {}).venue || {}).fullName || "", teams, stats, events, lineups };
+  const st = ((comp.status || {}).type) || {};
+  const tid = Object.fromEntries((comp.competitors || []).map(c => [String((c.team || {}).id), c.homeAway]));
+  // v35: substitutions (who came on, when, for whom) from the key events: "Substitution, Napoli. A replaces B."
+  const subs = {};
+  for (const k of s.keyEvents || []) {
+    if (!/substitut/i.test(String((k.type || {}).text || ""))) continue;
+    const m = String(k.text || "").match(/\.\s*(.+?) replaces (.+?)(?:\s+because of an injury)?\.?$/i);
+    const inName = m ? m[1].trim() : ((k.participants || [])[0] || {}).athlete?.displayName, outName = m ? m[2].trim() : ((k.participants || [])[1] || {}).athlete?.displayName;
+    const clock = (k.clock || {}).displayValue || "";
+    if (inName) subs[inName] = { ...(subs[inName] || {}), on: clock, for: outName || "" };
+    if (outName) subs[outName] = { ...(subs[outName] || {}), off: clock };
+  }
+  const pstat = (p, n) => { const x = (p.stats || []).find(y => y.name === n); return x ? Number(x.value ?? x.displayValue) || 0 : 0; };
+  // v35: the whole matchday squad (XI and bench) with shirt numbers, substitutions, goals and cards
+  const lineups = (s.rosters || []).map(t => {
+    const all = (t.roster || []).map(p => { const nm = (p.athlete || {}).displayName || "", sb = subs[nm] || {};
+      return { name: nm, id: String((p.athlete || {}).id || ""), pos: (p.position || {}).abbreviation || "", jersey: p.jersey || "", starter: !!p.starter,
+               on: p.subbedIn ? (sb.on || "") : null, for: p.subbedIn ? (sb.for || ((p.subbedInFor || {}).athlete || {}).displayName || "") : null,
+               off: p.subbedOut ? (sb.off || "") : null, goals: pstat(p, "totalGoals"), assists: pstat(p, "goalAssists"),
+               yellow: pstat(p, "yellowCards"), red: pstat(p, "redCards") }; });
+    return { side: t.homeAway, team: (t.team || {}).displayName, formation: t.formation || null, xi: all.filter(p => p.starter), bench: all.filter(p => !p.starter) };
+  });
+  return { competition: ((s.header || {}).league || {}).name || "", date: comp.date || null, status: st.detail || "", state: st.state || "",
+           completed: !!st.completed, venue: ((s.gameInfo || {}).venue || {}).fullName || "",
+           teams: teams.map(t => ({ ...t, id: String((((comp.competitors || []).find(c => c.homeAway === t.side) || {}).team || {}).id || "") })),
+           stats, events, lineups, timeline: timeline(s, tid), momentum: momentum(s, teams) };
+}
+// v35: the timeline card: goals (with the score and the assister), cards and substitutions, newest first; added time where ESPN says it
+function timeline(s, tid) {
+  const out = [];
+  let hs = 0, as = 0;
+  const minuteOf = c => { const p = String(c || "").replace(/'/g, "").split("+").map(x => parseInt(x)); return (p[0] || 0) + (p[1] || 0) / 100; };
+  const keys = [...(s.keyEvents || [])].sort((a, b) => minuteOf((a.clock || {}).displayValue) - minuteOf((b.clock || {}).displayValue));
+  for (const k of keys) {
+    const t = String((k.type || {}).text || ""), clock = (k.clock || {}).displayValue || "", side = tid[String((k.team || {}).id)] || null;
+    const names = (k.participants || []).map(p => (p.athlete || {}).displayName).filter(Boolean);
+    if (/goal|penalty - scored/i.test(t) && !/missed|saved/i.test(t)) {
+      const m = String(k.text || "").match(/(\d+),[^.]*?\s(\d+)\./);           // "Goal! Napoli 1, Bodø/Glimt 0."
+      if (m) { hs = +m[1]; as = +m[2]; } else if (side === "home") hs++; else if (side === "away") as++;
+      out.push({ clock, side, kind: /own goal/i.test(t) ? "own" : /penalty/i.test(t) ? "pen" : "goal", main: names[0] || "", extra: /own goal/i.test(t) ? "own goal" : (names[1] || ""), score: `${hs}-${as}` });
+    } else if (/red card/i.test(t)) out.push({ clock, side, kind: "red", main: names[0] || "" });
+    else if (/yellow/i.test(t)) out.push({ clock, side, kind: "yellow", main: names[0] || "" });
+    else if (/substitut/i.test(t)) {
+      const m = String(k.text || "").match(/\.\s*(.+?) replaces (.+?)(?:\s+because of an injury)?\.?$/i);
+      out.push({ clock, side, kind: "sub", main: m ? m[1].trim() : (names[0] || ""), extra: m ? m[2].trim() : (names[1] || "") });
+    } else if (/halftime/i.test(t)) out.push({ clock: "HT", kind: "ht", score: `${hs}-${as}` });
+  }
+  for (const c of s.commentary || []) {                              // "... announced 3 minutes of added time."
+    const m = String(c.text || "").match(/(\d+)\s+minutes? of added time/i);
+    if (m) out.push({ clock: (c.time || {}).displayValue || "", kind: "added", main: `Additional time ${m[1]} min` });
+  }
+  return out.sort((a, b) => minuteOf(b.clock === "HT" ? "45+59" : b.clock) - minuteOf(a.clock === "HT" ? "45+59" : a.clock));
+}
+// v35: our own momentum: each side's attacking threat minute by minute from ESPN's play-by-play (goals, shots, corners)
+const THREAT = [[/^goal|penalty - scored/i, 3], [/shot on target|saved/i, 1.6], [/woodwork/i, 1.6], [/shot blocked/i, 1], [/shot off target|missed/i, 0.8], [/corner/i, 0.6]];
+function momentum(s, teams) {
+  const H = (teams.find(t => t.side === "home") || {}).name, A = (teams.find(t => t.side === "away") || {}).name;
+  const h = new Array(91).fill(0), a = new Array(91).fill(0), goals = [];
+  let last = 0;
+  for (const c of s.commentary || []) {
+    const ty = String(((c.play || {}).type || {}).text || ""), team = ((c.play || {}).team || {}).displayName;
+    const p = String((c.time || {}).displayValue || "").replace(/'/g, "").split("+").map(x => parseInt(x));
+    if (!p[0]) continue;
+    const slot = p[0] <= 45 ? Math.min(p[0], 45) : Math.min(p[0], 90);
+    last = Math.max(last, slot);
+    const w = (THREAT.find(([re]) => re.test(ty)) || [])[1];
+    if (!w || !team || /own goal/i.test(ty)) continue;
+    const side = team === H ? "h" : team === A ? "a" : null;
+    if (!side) continue;
+    (side === "h" ? h : a)[slot] += w;
+    if (w === 3) goals.push({ m: slot, side });
+  }
+  const smooth = v => v.map((_, i) => i === 0 ? 0 : +(0.5 * v[i] + 0.25 * (v[i - 1] || 0) + 0.25 * (v[i + 1] || 0)).toFixed(2));
+  return last ? { source: "espn", upto: last, home: smooth(h), away: smooth(a), goals } : null;
 }
 async function transfers(id) {
   const r = await fetch(`https://sports.core.api.espn.com/v2/sports/soccer/athletes/${id}/transactions?lang=en&region=us`, { headers: { "user-agent": "Mozilla/5.0" } });
@@ -636,7 +722,7 @@ async function pitchapiCard(env, ctx, R) {
   for (const day of days) {
     for (const m of await paDay(env, ctx, day)) {
       const s = (teamSim(H.name, (m.home_team || {}).name) + teamSim(A.name, (m.away_team || {}).name)) / 2;
-      if (s >= 0.6 && (!best || s > best.s)) best = { s, id: m.id };
+      if (s >= 0.6 && (!best || s > best.s)) best = { s, id: m.id, home_id: String((m.home_team || {}).id || ""), away_id: String((m.away_team || {}).id || "") };
     }
     if (best) break;
   }
@@ -652,7 +738,31 @@ async function pitchapiCard(env, ctx, R) {
   }).filter(p => p.groups.length);
   if (!periods.length) return null;                       // PitchAPI hasn't filled this match in yet
   periods.sort((a, b) => ["All", "1st", "2nd"].indexOf(a.name) - ["All", "1st", "2nd"].indexOf(b.name));
-  return { source: "pitchapi", pa_id: best.id, periods };
+  // v35: xG momentum (every shot's xG by minute) and player ratings, both from PitchAPI after full-time
+  let mom = null, ratings = null;
+  try {
+    const sh = await pa(env, `/v1/matches/${best.id}/shots`);
+    const h = new Array(91).fill(0), a = new Array(91).fill(0), goals = [];
+    let n = 0;
+    for (const per of (sh || {}).periods || []) for (const x of per.shots || []) {
+      const mn = Math.max(1, Math.min(90, parseInt(x.minute) || 0)), xg = parseFloat(x.expected_goals) || 0, tm = String(x.team_id || "");
+      const side = tm && tm === best.home_id ? "h" : tm && tm === best.away_id ? "a" : null;
+      if (!side) continue;
+      (side === "h" ? h : a)[mn] += xg; n++;
+      if (/goal/i.test(String(x.event_type || x.outcome || "")) && !/own/i.test(String(x.event_type || ""))) goals.push({ m: mn, side });
+    }
+    const smooth = v => v.map((_, i) => i === 0 ? 0 : +(0.5 * v[i] + 0.25 * (v[i - 1] || 0) + 0.25 * (v[i + 1] || 0)).toFixed(3));
+    if (n >= 5) mom = { source: "xg", upto: 90, home: smooth(h), away: smooth(a), goals };
+  } catch (e) {}
+  try {
+    const pls = await pa(env, `/v1/matches/${best.id}/players`);
+    const flat = (o, acc) => { if (Array.isArray(o)) o.forEach(x => flat(x, acc)); else if (o && typeof o === "object") {
+      const k = String(o.key || "").toLowerCase(), v = o.value ?? o.stat;
+      if (/rating/.test(k)) { const val = parseFloat(typeof v === "object" && v ? v.value : v); if (isFinite(val)) acc.r = val; }
+      Object.values(o).forEach(x => (x && typeof x === "object") && flat(x, acc)); } return acc; };
+    ratings = (Array.isArray(pls) ? pls : []).map(p => ({ name: (p.player || {}).name || "", rating: flat(p.stats || [], {}).r })).filter(p => p.name && p.rating != null);
+  } catch (e) {}
+  return { source: "pitchapi", pa_id: best.id, periods, momentum: mom, ratings };
 }
 async function cachedJSON(ctx, key, maxAge, make) {
   const ck = new Request(key), hit = await caches.default.match(ck);
@@ -715,7 +825,22 @@ export default {
       const R = await matchResult(m[1], m[2]).catch(() => null);
       if (!R) return new Response(JSON.stringify({ error: "not available" }), { status: 404, headers: { ...CORS, "content-type": "application/json" } });
       R.card = (R.completed ? await pitchapiCard(env, ctx, R).catch(() => null) : null) || espnCard(R);
-      const maxAge = R.card.source === "pitchapi" ? 86400 : R.completed ? 900 : 60;
+      if (R.card.momentum) R.momentum = R.card.momentum;                // v35: xG momentum after full-time, when PitchAPI has the shots
+      if ((R.card.ratings || []).length) {                               // v35: player ratings onto the lineups
+        const key = n => normTeam(String(n).split(" ").slice(-1)[0]) + "|" + normTeam(String(n).split(" ")[0]).slice(0, 1);
+        const rt = Object.fromEntries(R.card.ratings.map(p => [key(p.name), p.rating]));
+        for (const l of R.lineups || []) for (const p of [...l.xi, ...l.bench]) if (rt[key(p.name)] != null) p.rating = rt[key(p.name)];
+      }
+      // v35: before the team sheet, each club's full squad (shirt number, name, position) from ESPN
+      if (!(R.lineups || []).length || R.lineups.some(l => l.xi.length < 11)) {
+        R.squads = {};
+        await Promise.all((R.teams || []).map(async t => {
+          if (!t.id) return;
+          try { const x = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${m[1]}/teams/${t.id}/roster`, { headers: { "user-agent": "Mozilla/5.0" } });
+                if (x.ok) R.squads[t.side] = ((await x.json()).athletes || []).map(a => ({ name: a.displayName, id: String(a.id || ""), jersey: a.jersey || "", pos: (a.position || {}).abbreviation || "" })); } catch (e) {}
+        }));
+      }
+      const maxAge = R.card.source === "pitchapi" ? 86400 : R.completed ? 900 : R.state === "pre" ? 120 : 60;   // before kick-off: every 2 minutes, so the team sheet shows quickly
       const res = new Response(JSON.stringify(R), { headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": `public, max-age=${maxAge}` } });
       ctx.waitUntil(caches.default.put(ck, res.clone()));
       return res;
@@ -758,4 +883,4 @@ export default {
   },
 };
 export { liveScores, findAssist, handleUpdate, maybeDispatch, subscribers, search, liveTick, lineupTick, snapshot, liveMessages, pressureCheck, flushOutbox, adminStats,
-         eventKey, matchResult, transfers, espnCard, pitchapiCard, teamSim };
+         eventKey, matchResult, transfers, espnCard, pitchapiCard, teamSim, timeline, momentum };

@@ -190,7 +190,8 @@ table.mstats td.c { text-align: center; color: var(--muted); font-size: .85rem; 
 h2[id] { scroll-margin-top: 70px; }
 
 /* v35: the scoreboard on a dark band with white scores, and the match stats card (in play and full-time) */
-:root { --st-h: #49C35A; --st-a: #7C80F5; --st-card: #1A1F24; --st-ink: #F2F4F5; --st-muted: #9AA3AA; --st-track: #2A3138; }
+/* v35: Kwallo's own colours (as on the chance bar): home = Kwallo green, away = our ink (near-white in dark mode); cards follow the theme */
+:root { --st-h: var(--home); --st-a: var(--away); --st-card: var(--surface); --st-ink: var(--ink); --st-muted: var(--muted); --st-track: var(--line); }
 .mhead { background: #0B201B; color: #fff; border-radius: 16px; padding: .9rem .4rem; }
 .mhead .mcentre .score, .mhead .mside b { color: #fff; }
 .mhead .mcentre .muted { color: #B9CEC5; }
@@ -203,15 +204,16 @@ h2[id] { scroll-margin-top: 70px; }
 .dot.h { background: var(--st-h); } .dot.a { background: var(--st-a); }
 .pswitch { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--st-card); border-radius: 14px; padding: 4px; margin-bottom: .8rem; }
 .pswitch button { border: 0; background: transparent; color: var(--st-ink); font: 700 .9rem var(--font); font-stretch: 85%; letter-spacing: .03em; padding: .55rem 0; border-radius: 11px; cursor: pointer; }
-.pswitch button.on { background: #F2F4F5; color: #111; }
-.scard { background: var(--st-card); color: var(--st-ink); border-radius: 16px; padding: 1rem 1rem .4rem; margin-bottom: .8rem; }
+.pswitch button.on { background: var(--ink); color: var(--bg); }
+.pswitch { border: 1px solid var(--line); }
+.scard { background: var(--st-card); color: var(--st-ink); border: 1px solid var(--line); border-radius: 16px; padding: 1rem 1rem .4rem; margin-bottom: .8rem; }
 .scard h3 { text-align: center; font-size: 1.05rem; margin: 0 0 .9rem; color: var(--st-ink); }
 .srow { margin-bottom: 1rem; }
 .slab { display: flex; justify-content: space-between; align-items: center; gap: .6rem; margin-bottom: .45rem; }
 .slab span { text-align: center; flex: 1; font-size: .95rem; }
 .slab b { font-weight: 600; font-size: 1.02rem; min-width: 2.5rem; } .slab b:last-child { text-align: right; }
 .pill { flex: none !important; padding: .05rem .5rem; border-radius: 999px; font-weight: 700; font-size: .85rem; color: #111; }
-.pill.h { background: var(--st-h); } .pill.a { background: var(--st-a); color: #fff; }
+.pill.h { background: var(--st-h); color: var(--bg); } .pill.a { background: var(--st-a); color: var(--bg); }
 .pbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--st-track); }
 .pbar i { display: block; } .pbar .h { background: var(--st-h); } .pbar .a { background: var(--st-a); }
 .halves { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
@@ -220,3 +222,41 @@ h2[id] { scroll-margin-top: 70px; }
 .half i { display: block; height: 100%; border-radius: 3px; }
 .half.h i { background: color-mix(in srgb, var(--st-h) 45%, var(--st-track)); } .half.a i { background: color-mix(in srgb, var(--st-a) 45%, var(--st-track)); }
 .half.h.lead i { background: var(--st-h); } .half.a.lead i { background: var(--st-a); }
+
+/* v35: match overview (momentum and timeline), goal timing grid, team sheets and squads */
+.momentum svg { width: 100%; height: auto; display: block; }
+.momentum .mzh { fill: color-mix(in srgb, var(--home) 10%, transparent); } .momentum .mza { fill: color-mix(in srgb, var(--away) 7%, transparent); }
+.momentum .mh { fill: var(--home); } .momentum .ma { fill: var(--away); opacity: .85; }
+.momentum .mht { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.momentum .mg { font-size: 11px; }
+.momentum .skeys { justify-content: center; margin: .4rem 0 .4rem; }
+.timeline { padding-top: .8rem; }
+.tlhead { display: flex; align-items: center; gap: .8rem; margin: 0 0 .7rem; font-weight: 700; font-stretch: 85%; }
+.tlhead::before, .tlhead::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.tlhead .live { color: var(--warn); }
+.tl { display: flex; align-items: center; gap: .55rem; padding: .5rem 0; }
+.tl.a { flex-direction: row-reverse; text-align: right; }
+.tl .min { min-width: 2.4rem; font-weight: 700; color: var(--ink); }
+.tl.a .min { text-align: right; }
+.tl .ic { width: 1.3rem; text-align: center; }
+.tl .nm { flex: 0 1 auto; }
+.tl.mid { justify-content: center; color: var(--muted); font-weight: 650; font-size: .9rem; }
+.tl .chip, .tl.mid .chip { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: .15rem .7rem; }
+.spill { border: 2px solid var(--home); border-radius: 999px; padding: .05rem .6rem; font-weight: 800; font-stretch: 80%; font-size: 1.05rem; white-space: nowrap; }
+.tl.a .spill { border-color: var(--away); }
+.cardi { display: inline-block; width: .6rem; height: .85rem; border-radius: 2px; vertical-align: -1px; margin-left: .15rem; }
+.cardi.y { background: #E9C43B; } .cardi.r { background: #D8433A; }
+.subi { font-style: normal; color: var(--home); font-weight: 800; }
+table.timing td.heat { background: color-mix(in srgb, var(--home) calc(var(--a) * 45%), transparent); }
+table.timing th { white-space: normal; }
+.lswitch { margin-top: .8rem; }
+.lswitch button { font-size: .95rem; }
+.coach { display: flex; align-items: center; gap: .6rem; margin: .8rem 0; }
+ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: center; gap: .6rem; }
+.jn { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border-radius: 50%; background: var(--bg); border: 1px solid var(--line);
+      font-weight: 700; font-size: .85rem; color: var(--ink); }
+.pos .pl .jn { width: 1.6rem; height: 1.6rem; font-size: .75rem; margin-right: .3rem; }
+.oni { color: var(--good); font-weight: 800; } .offi { color: var(--bad); font-weight: 800; }
+.rchip { font-weight: 800; font-stretch: 80%; padding: .1rem .4rem; border-radius: 4px; color: #111; font-size: .9rem; }
+.rchip.r1 { background: #3FB37F; } .rchip.r2 { background: #9FD36A; } .rchip.r3 { background: #E9C43B; } .rchip.r4 { background: #E98A3B; }
+.momentum .mnote { text-align: center; margin: 0 0 .5rem; }

@@ -95,7 +95,9 @@ def export(ns, data_dir, mode):
                                             "pH", "pD", "pA", "fair", "pBTTS", "pOver25", "top_pick", "confirmed"]})
         details[ms] = clean({"match": row, "verdict": v, "markets": get("markets", k), "expected_xi": xi, "last_time": get("last_time", k),
                              "scorers": get("scorers", k), "trends": {"home": (P.get("trends") or {}).get(k[2]), "away": (P.get("trends") or {}).get(k[3])},
-                             "team_style": {t: (P.get("team_style") or {}).get(t) for t in (k[2], k[3])}, "h2h": h2h(k[2], k[3])})
+                             "team_style": {t: (P.get("team_style") or {}).get(t) for t in (k[2], k[3])}, "h2h": h2h(k[2], k[3]),
+                             "timing": (ns.get("GOAL_TIMING") or {}).get(k),                              # v35: goals by 15-minute period
+                             "coach": {s_: ((xi.get(s_) or {}).get("coach") or (ns.get("COACH_OF") or {}).get(t_)) for s_, t_ in (("home", k[2]), ("away", k[3]))}})
         for t in (k[2], k[3]):
             teams.setdefault(slug(t), {"slug": slug(t), "name": t, "league": k[0], "league_slug": slug(k[0])})
     idx_path = os.path.join(site_dir, "index.json")

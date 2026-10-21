@@ -152,6 +152,7 @@ Upload the new files to GitHub and paste the new `worker/worker.js` into the Wor
 
 1. **Upload everything** in the `pitchlab` folder to your GitHub project (Add file → Upload files, including the `.github` folder). The website updates by itself.
 2. **The Worker:** Cloudflare → Workers & Pages → **pitchlab-bot** → **Edit code** → paste the new `worker/worker.js` → **Deploy**. The bot's database gets its new tables by itself.
+   If you pasted an earlier v35 copy, paste the latest one again (it adds the match overview, full squads, ratings and Egypt's results).
 3. **Check the Worker's schedule:** Worker → Settings → **Trigger Events**: the cron must be **`* * * * *`** (every minute). If it still says `*/15 * * * *`, live alerts arrive up to 15 minutes late: change it.
 4. **Links in lineup alerts:** Worker → Settings → Variables and Secrets → add a **Text** variable `SITE_URL` = your site's address (e.g. `https://kwallo.pages.dev`).
    **Full match statistics after full-time:** in the same place, add a **Secret** `PITCHAPI_KEY` = your PitchAPI key (the same one as in GitHub). Without it, the match stats card shows ESPN's figures only (no xG, big chances, halves or ratings).

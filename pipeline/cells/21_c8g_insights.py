@@ -826,6 +826,10 @@ if PLAYER_MODEL and len(lu):
                 lu_pa = pa(f"/v1/matches/{ml_[j_]['id']}/lineups") or {}
                 for side_ in ("home", "away"):
                     sd_ = lu_pa.get(side_) or {}
+                    co_ = sd_.get("coach") or sd_.get("manager")                  # v35: the coach, for the website's lineups
+                    co_ = co_.get("name") if isinstance(co_, dict) else co_
+                    if co_ and side_ in EXPECTED_XI[keys_[i_]]:
+                        EXPECTED_XI[keys_[i_]][side_]["coach"] = str(co_)
                     if sd_.get("starters") and side_ in EXPECTED_XI[keys_[i_]]:
                         kind_ = "confirmed" if sd_.get("confirmed") else ("last starting XI" if sd_.get("lineup_type") == "lastStarting11" else str(sd_.get("lineup_type") or "predicted"))
                         names_pa = [p_.get("name") for p_ in sd_["starters"]]
@@ -936,3 +940,45 @@ for f_ in FILE_CHECKS:
     if f_["issues"]:
         health(f"Saved file: {f_['file']}", False, "; ".join(f_["issues"]))
 health("Saved-file checks", all(not f_["issues"] for f_ in FILE_CHECKS), f"{len(FILE_CHECKS)} files checked when read back")
+
+# ---------- v35: goal timing in 15-minute periods, for the website's Markets tab ----------
+# The chance of a goal in each period of the coming match (expected goals split by the competition's real goal-minute pattern),
+# and each side's share of goals scored and conceded per period this season (ESPN's goal minutes; own goals left out of team shares).
+TIMING_BANDS = ["0-15", "16-30", "31-45+", "46-60", "61-75", "76-90+"]
+GOAL_TIMING = {}
+def _band(mn):
+    return min(5, max(0, (int(mn) - 1) // 15)) if pd.notna(mn) else None
+if "events_all" in globals() and len(events_all) and "lu" in globals() and len(lu):
+    ge_ = events_all[events_all["type"].astype(str).str.match(r"^(Goal|Penalty - Scored|Own Goal)")].copy()
+    ge_["band"] = pd.to_numeric(ge_["minute"], errors="coerce").map(_band)
+    ge_ = ge_.dropna(subset=["band"])
+    ge_["own"] = ge_["type"].astype(str).str.startswith("Own Goal")
+    all_share = (ge_["band"].value_counts(normalize=True).reindex(range(6), fill_value=0)).values
+    comp_share = {c_: g_["band"].value_counts(normalize=True).reindex(range(6), fill_value=0).values for c_, g_ in ge_.groupby("comp") if len(g_) >= 300}
+    code_of_ = {**{v_: k_ for k_, v_ in ESPN_LEAGUES.items()}, **{v_: k_ for k_, v_ in EURO_CODES.items()}}
+    ev_teams = lu.drop_duplicates(["event_id", "team_id"])[["event_id", "team_id", "date"]].astype({"event_id": str, "team_id": str})
+    ev_teams = ev_teams[pd.to_datetime(ev_teams["date"]) >= pd.Timestamp(TODAY.year if TODAY.month >= 7 else TODAY.year - 1, 7, 1)]
+    ge_s = ge_[ge_["event_id"].astype(str).isin(set(ev_teams["event_id"]))].assign(event_id=lambda d: d["event_id"].astype(str), team_id=lambda d: d["team_id"].astype(str))
+    def team_bands(tid):
+        evs_ = set(ev_teams.loc[ev_teams["team_id"] == str(tid), "event_id"])
+        g_ = ge_s[ge_s["event_id"].isin(evs_) & ~ge_s["own"]]
+        f_, a_ = g_[g_["team_id"] == str(tid)], g_[g_["team_id"] != str(tid)]
+        share = lambda d: [round(float(x), 3) for x in d["band"].value_counts(normalize=True).reindex(range(6), fill_value=0).values] if len(d) else None
+        return {"for": share(f_), "against": share(a_), "n_for": int(len(f_)), "n_against": int(len(a_)), "matches": len(evs_)}
+    ids_ = {}
+    for fr_, cc_ in ((espn_fx, "League"), (euro_up, "Competition")):
+        if len(fr_) and {"home_id", "away_id"}.issubset(fr_.columns):
+            for r_ in fr_.itertuples():
+                ids_[(getattr(r_, cc_), str(r_.Date)[:10], r_.HomeTeam, r_.AwayTeam)] = (str(r_.home_id), str(r_.away_id))
+    for df_ in [pred_dom, pred_eu]:
+        for r_ in (df_.itertuples() if len(df_) else []):
+            k_ = (r_.Competition, str(r_.Date)[:10], r_.Home, r_.Away)
+            lam_ = float(r_.ExpHome) + float(r_.ExpAway) if pd.notna(r_.ExpHome) and pd.notna(r_.ExpAway) else None
+            if lam_ is None:
+                continue
+            sh_ = comp_share.get(code_of_.get(r_.Competition), all_share)
+            ent_ = {"bands": TIMING_BANDS, "p_goal": [round(float(1 - np.exp(-lam_ * s_)), 3) for s_ in sh_]}
+            if k_ in ids_:
+                ent_["home"], ent_["away"] = team_bands(ids_[k_][0]), team_bands(ids_[k_][1])
+            GOAL_TIMING[k_] = ent_
+    print(f"Goal timing: {len(GOAL_TIMING)} matches ({len(ge_)} goals with minutes; {len(comp_share)} competitions with their own pattern).")

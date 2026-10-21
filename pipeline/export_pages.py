@@ -80,6 +80,48 @@ def _rounds(cur, upcoming, slug):
     return rounds, nxt
 
 
+def _cup_stage(date):
+    """v35: the European cups' knockout rounds by date (UEFA's usual calendar): play-offs in February, last 16 in March, and so on."""
+    d = pd.Timestamp(date)
+    if d.month == 2:
+        return "Knockout play-offs"
+    if d.month == 3:
+        return "Round of 16"
+    if d.month == 4 and d.day <= 20:
+        return "Quarter-finals"
+    if (d.month == 4 and d.day > 20) or (d.month == 5 and d.day <= 15):
+        return "Semi-finals"
+    return "Final"
+
+
+def _cup_rounds(cur, upcoming, slug):
+    """v35: European cups: league-phase matchdays numbered from the results (each club plays once per matchday), knockout ties grouped
+    by round name, and upcoming ties without a number yet as "Next matches" (never "null")."""
+    def in_league_phase(d):
+        d = pd.Timestamp(d)
+        return d.month >= 7 or d.month == 1
+    up_lp = [m for m in upcoming if in_league_phase(m["Date"][:10])]
+    up_ko = [m for m in upcoming if not in_league_phase(m["Date"][:10])]
+    rounds, nxt = ([], None)
+    if len(cur):
+        rounds, nxt = _rounds(cur, up_lp, slug)
+    elif up_lp:
+        rounds = [{"round": "next", "name": "Next matches", "matches": [{"date": m["Date"][:10], "home": m["Home"], "away": m["Away"], "slug": m["slug"],
+                   "pH": m.get("pH"), "pD": m.get("pD"), "pA": m.get("pA"), "kickoff": m.get("kickoff"), "played": False,
+                   "home_slug": m["home_slug"], "away_slug": m["away_slug"]} for m in up_lp]}]
+        nxt = "next"
+    by_stage = {}
+    for m in sorted(up_ko, key=lambda x: x["Date"]):
+        by_stage.setdefault(_cup_stage(m["Date"][:10]), []).append({"date": m["Date"][:10], "home": m["Home"], "away": m["Away"], "slug": m["slug"],
+            "pH": m.get("pH"), "pD": m.get("pD"), "pA": m.get("pA"), "kickoff": m.get("kickoff"), "played": False,
+            "home_slug": m["home_slug"], "away_slug": m["away_slug"]})
+    for name, ms in by_stage.items():
+        rounds.append({"round": slug(name), "name": name, "matches": ms})
+    if by_stage and (nxt is None or all(x["played"] for r in rounds if r["round"] == nxt for x in r["matches"])):
+        nxt = slug(next(iter(by_stage)))
+    return rounds, nxt
+
+
 def _family(bet):
     b = str(bet).lower()
     for fam, words in [("Corners", ["corner"]), ("Cards", ["card"]), ("Shots", ["shot"]), ("Fouls", ["foul"]), ("Offsides", ["offside"]),
@@ -136,8 +178,32 @@ def _track(ns, data_dir):
     return out
 
 
+CALENDAR_PA = {"USA", "BRA", "ARG", "BOL", "NOR", "SWE"}          # PitchAPI countries whose seasons follow the calendar year
+CALENDAR_ESPN = {"usa.1", "bra.1", "bra.2", "arg.1", "bol.1", "nor.1", "swe.1"}
+
+def _season_start(calendar):
+    """v35: the start of the current season: 1 January for calendar-year leagues, otherwise 1 July."""
+    now = pd.Timestamp.now()
+    return pd.Timestamp(now.year, 1, 1) if calendar else pd.Timestamp(now.year if now.month >= 7 else now.year - 1, 7, 1)
+
+STAT_KEYS = {"goals": ("goals",), "assists": ("assists", "goal_assist", "goalassist"), "xg": ("expected_goals", "expectedgoals", "xg"),
+             "xa": ("expected_assists", "expectedassists", "xa"), "shots": ("total_shots", "totalshots", "shots"),
+             "sot": ("shotsontarget", "shots_on_target", "sot", "ontargetscoringattempt")}
+
+def headline(stats):
+    """v35: goals, assists, xG, xA, shots and shots on target (totals) from whichever keys the source uses."""
+    out = {}
+    for k, cands in STAT_KEYS.items():
+        v = next((stats[c] for c in cands if c in stats), None)
+        if isinstance(v, dict):
+            v = v.get("total")
+        out[k] = v
+    return out
+
 def _players(ns, data_dir, slug):
-    """Every PitchAPI statistic per player: totals, per 90 and per match, by PitchAPI's own sections; and a match log."""
+    """Every PitchAPI statistic per player: totals, per 90 and per match, by PitchAPI's own sections; and a match log.
+    v35: this season only (each competition's own start), with a per-competition breakdown, and leader tables built from each
+    competition's own matches (before, a player was listed under his last match's competition with every competition's totals)."""
     pp_p, pm_p, lab_p = (os.path.join(data_dir, f) for f in ["pitchapi_players.csv", "pitchapi_matches.csv", "pitchapi_player_stat_labels.json"])
     if not (os.path.exists(pp_p) and os.path.exists(pm_p)):
         return {}, {}, {}
@@ -159,8 +225,7 @@ def _players(ns, data_dir, slug):
     pp["stats"] = pp["stats_json"].map(lambda s: json.loads(s) if isinstance(s, str) and s.startswith("{") else {})
     kind = {k: (v.get("type") or "") for k, v in labels.items()}
     is_avg = lambda k: kind.get(k) in ("double", "percent", "fraction") or any(w in k for w in ("rating", "percent", "accuracy", "pct"))
-    players, by_league = {}, {}
-    for pid, g in pp.sort_values("date").groupby("player_id"):
+    def agg(g):
         mins = sum(float(s.get("minutes_played", 0) or 0) for s in g["stats"])
         tot, avg_w = {}, {}
         for s in g["stats"]:
@@ -175,13 +240,29 @@ def _players(ns, data_dir, slug):
             stats[k] = {"total": round(v, 2), "per90": round(90 * v / mins, 2) if mins >= 90 else None, "per_match": round(v / len(g), 2)}
         for k, (num, den) in avg_w.items():
             stats[k] = {"average": round(num / den, 2)}
+        return mins, stats
+    starts = {lg: _season_start(str(lg).split(":")[0] in CALENDAR_PA) for lg in pp["league"].unique()}
+    pp["in_season"] = pd.to_datetime(pp["date"]) >= pp["league"].map(starts)
+    pa_to_ours_lg = {f"{cc}:{name}": ours for d in [ns.get("PA_XG_LEAGUES") or {}, ns.get("PA_TACTIC_LEAGUES") or {}] for ours, (cc, name) in d.items()}
+    pa_to_ours_lg.update({k: v[0] for k, v in (ns.get("PA_XG_MORE") or {}).items()})
+    comp_name = lambda lg: pa_to_ours_lg.get(lg, lg)
+    players, by_league = {}, {}
+    for pid, g in pp.sort_values("date").groupby("player_id"):
         name, last = g["player"].iloc[-1], g.iloc[-1]
         ps = f"{slug(name)}-{str(pid)[-4:]}"
-        log = [{"date": str(r.date)[:10], "competition": r.league, "team": r.team, "opp": r.opp, "venue": r.venue,
+        seas = g[g["in_season"]]
+        mins, stats = agg(seas if len(seas) else g)
+        by_comp = []
+        for lg, gl in seas.groupby("league"):
+            m_l, st_l = agg(gl)
+            by_comp.append({"competition": comp_name(lg), "matches": int(len(gl)), "minutes": int(m_l), **headline(st_l)})
+            by_league.setdefault(lg, []).append({"slug": ps, "name": name, "team": last["team"], "team_slug": slug(last["team"]),
+                                                 "matches": int(len(gl)), "minutes": int(m_l), "stats": st_l})
+        log = [{"date": str(r.date)[:10], "competition": comp_name(r.league), "team": r.team, "opp": r.opp, "venue": r.venue,
                 "score": f"{r.score_home}-{r.score_away}" if pd.notna(r.score_home) else None, "stats": r.stats} for r in g.tail(10).iloc[::-1].itertuples()]
-        players[ps] = {"slug": ps, "name": name, "team": last["team"], "team_slug": slug(last["team"]), "league": last["league"],
-                       "matches": int(len(g)), "minutes": int(mins), "stats": stats, "log": log}
-        by_league.setdefault(last["league"], []).append(ps)
+        players[ps] = {"slug": ps, "name": name, "team": last["team"], "team_slug": slug(last["team"]), "league": comp_name(last["league"]),
+                       "matches": int(len(seas) if len(seas) else len(g)), "minutes": int(mins), "stats": stats, "log": log,
+                       "period": "this season" if len(seas) else "the last 12 months", "by_competition": sorted(by_comp, key=lambda x: -x["minutes"])}
     return players, by_league, labels
 
 
@@ -203,24 +284,35 @@ def _espn_players(ns, slug, skip_names):
     if not len(d):
         return {}, {}
     d["team"] = [tm.get((l, t), t) for l, t in zip(d["league"], d["team"])]
-    players, by_league = {}, {}
-    for pid, g in d.sort_values("date").groupby("player_id"):
-        name, last = str(g["player"].iloc[-1]), g.iloc[-1]
-        if (str(last["team"]), name) in skip_names:                          # already has a PitchAPI page with every statistic
-            continue
+    d["in_season"] = d["date"] >= d["comp"].map(lambda c: _season_start(c in CALENDAR_ESPN))      # v35: this season, per competition
+    def agg(g):
         mins = float(pd.to_numeric(g["minutes"], errors="coerce").fillna(0).sum()) if "minutes" in g else 0.0
         stats = {}
         for k in ESPN_STATS:
             if k in g:
                 v = float(pd.to_numeric(g[k], errors="coerce").fillna(0).sum())
                 stats[k] = {"total": round(v, 2), "per90": round(90 * v / mins, 2) if mins >= 90 else None, "per_match": round(v / len(g), 2)}
+        return mins, stats
+    players, by_league = {}, {}
+    for pid, g in d.sort_values("date").groupby("player_id"):
+        name, last = str(g["player"].iloc[-1]), g.iloc[-1]
+        if (str(last["team"]), name) in skip_names:                          # already has a PitchAPI page with every statistic
+            continue
         ps = f"{slug(name)}-{str(pid)[-4:]}"
+        seas = g[g["in_season"]]
+        mins, stats = agg(seas if len(seas) else g)
+        by_comp = []
+        for lg, gl in seas.groupby("league"):
+            m_l, st_l = agg(gl)
+            by_comp.append({"competition": lg, "matches": int(len(gl)), "minutes": int(m_l), **headline(st_l)})
+            by_league.setdefault(lg, []).append({"slug": ps, "name": name, "team": last["team"], "team_slug": slug(last["team"]),
+                                                 "matches": int(len(gl)), "minutes": int(m_l), "stats": st_l})
         log = [{"date": str(r.date)[:10], "competition": r.league, "team": r.team, "started": bool(r.starter),
                 "stats": {k: getattr(r, k) for k in ESPN_STATS if k in g and pd.notna(getattr(r, k))}} for r in g.tail(10).iloc[::-1].itertuples()]
         players[ps] = {"slug": ps, "name": name, "team": last["team"], "team_slug": slug(last["team"]), "league": last["league"], "source": "ESPN",
-                       "position": last.get("pos"), "matches": int(len(g)), "minutes": int(mins), "stats": stats, "log": log,
-                       "espn_id": str(pid)}                                   # v35: for the transfer history
-        by_league.setdefault(last["league"], []).append(ps)
+                       "position": last.get("pos"), "matches": int(len(seas) if len(seas) else len(g)), "minutes": int(mins), "stats": stats, "log": log,
+                       "espn_id": str(pid), "period": "this season" if len(seas) else "the last 12 months",       # v35: ESPN id for the transfer history
+                       "by_competition": sorted(by_comp, key=lambda x: -x["minutes"])}
     return players, by_league
 
 
@@ -244,9 +336,10 @@ def build(ns, data_dir, mode, write, slug, clean):
         table = _table(cur) if len(cur) else []
         for t in table:
             t["team_slug"] = slug(t["team"])
-        rounds, nxt = _rounds(cur, up, slug) if (comp not in CUPS or len(cur)) else ([{"round": None, "matches": [{"date": m["Date"][:10], "home": m["Home"], "away": m["Away"],
-                                                                         "slug": m["slug"], "pH": m.get("pH"), "pD": m.get("pD"), "pA": m.get("pA"), "kickoff": m.get("kickoff"),
-                                                                         "played": False, "home_slug": m["home_slug"], "away_slug": m["away_slug"]} for m in up]}], None)
+        if comp in CUPS:
+            rounds, nxt = _cup_rounds(cur, up, slug)                     # v35: league-phase matchdays 1-8, then knockout rounds by name
+        else:
+            rounds, nxt = _rounds(cur, up, slug)
         n_files += write(f"site/comp/{cs}.json", clean({"name": comp, "slug": cs, "group": cal_group(comp), "season": season_of.get(comp), "table": table,
                                                         "rounds": rounds, "current_round": nxt, "upcoming": [m["slug"] for m in up]}))
         comps.append({"slug": cs, "name": comp, "group": cal_group(comp), "group_name": GROUP_NAMES.get(cal_group(comp)), "upcoming": len(up), "has_table": bool(table)})
@@ -259,14 +352,16 @@ def build(ns, data_dir, mode, write, slug, clean):
     for d in [ns.get("PA_XG_LEAGUES") or {}, ns.get("PA_TACTIC_LEAGUES") or {}]:
         for ours, (cc, name) in d.items():
             pa_name_to_ours[f"{cc}:{name}"] = ours
-    covered = {pa_name_to_ours.get(lg, lg) for lg, pss in by_league.items() if len(pss) >= 50}   # PitchAPI already has this league's players
+    pa_name_to_ours.update({k: v[0] for k, v in (ns.get("PA_XG_MORE") or {}).items()})    # v35: the European cups and the extra leagues too
+    by_league = {pa_name_to_ours.get(lg, lg): rows for lg, rows in by_league.items()}   # leader tables by our competition names
+    covered = {lg for lg, rows in by_league.items() if len(rows) >= 50}                 # PitchAPI already has this league's players
     e_players, e_by = _espn_players(ns, slug, {(p["team"], p["name"]) for p in players.values()})
-    for lg, pss in e_by.items():
-        if lg in covered:                                                # keep PitchAPI's richer pages there
+    for ps, p in e_players.items():
+        players.setdefault(ps, p)
+    for lg, rows in e_by.items():
+        if lg in covered:                                                # keep PitchAPI's richer tables there
             continue
-        for ps in pss:
-            players[ps] = e_players[ps]
-        by_league.setdefault(lg, []).extend(pss)
+        by_league.setdefault(lg, []).extend(rows)
     for k, v in ESPN_STATS.items():
         labels.setdefault(k, {"label": v, "section": "Match stats (ESPN)", "order": 10000 + list(ESPN_STATS).index(k)})
     # v35: ESPN's id for PitchAPI players too (matched by team and name in ESPN's lineups), so every player page can show transfers
@@ -282,22 +377,22 @@ def build(ns, data_dir, mode, write, slug, clean):
                 p["espn_id"] = by_tn_.get((p["team_slug"], nk_(p["name"])))
     for ps, p in players.items():
         n_files += write(f"site/player/{ps}.json", clean({**p, "labels": {k: labels.get(k) for k in p["stats"]}}))
-    pa_to_ours = {}
-    for d in [ns.get("PA_XG_LEAGUES") or {}, ns.get("PA_TACTIC_LEAGUES") or {}]:
-        for ours, (cc, name) in d.items():
-            pa_to_ours[f"{cc}:{name}"] = ours
-    for lg, pss in by_league.items():
-        ours = pa_to_ours.get(lg, lg)
-        rows = [{"slug": ps, "name": players[ps]["name"], "team": players[ps]["team"], "team_slug": players[ps]["team_slug"], "matches": players[ps]["matches"],
-                 "minutes": players[ps]["minutes"],
-                 "stats": {k: {"p90": v.get("per90"), "total": v.get("total", v.get("average"))} for k, v in players[ps]["stats"].items()},   # v33: both
-                 "totals": {k: v.get("total") for k, v in players[ps]["stats"].items() if "total" in v}} for ps in pss]
+    # v35: each competition's leaders from its own matches this season (each row is that player's figures in that competition)
+    for ours, rws in by_league.items():
+        rows = [{"slug": r["slug"], "name": r["name"], "team": r["team"], "team_slug": r["team_slug"], "matches": r["matches"], "minutes": r["minutes"],
+                 "stats": {k: {"p90": v.get("per90"), "total": v.get("total", v.get("average"))} for k, v in r["stats"].items()},   # v33: both
+                 "totals": {k: v.get("total") for k, v in r["stats"].items() if "total" in v}} for r in rws if r["slug"] in players]
         n_files += write(f"site/leaders/{slug(ours)}.json", clean({"competition": ours, "labels": labels, "players": rows}))
     # ---------- teams ----------
     team_players = {}
     for ps, p in players.items():
+        if p.get("period") != "this season":
+            continue                                                     # v35: this season's squad only
+        st_ = p["stats"]
         team_players.setdefault(p["team_slug"], []).append({"slug": ps, "name": p["name"], "matches": p["matches"], "minutes": p["minutes"], "espn_id": p.get("espn_id"),
-                                                            "rating": (p["stats"].get("rating_title") or p["stats"].get("rating") or {}).get("average")})
+                                                            "position": p.get("position"),
+                                                            "rating": (st_.get("rating_title") or st_.get("rating") or {}).get("average"),
+                                                            **headline(st_)})        # v35: goals, assists, xG, xA, shots, shots on target
     P = ns.get("payload") or {}
     teams = {}
     if len(res):
