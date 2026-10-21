@@ -252,7 +252,8 @@
       if (typeof x === "object") return mode === "total" ? x.total : (x.p90 != null ? x.p90 : (p.minutes ? 90 * (x.total || 0) / p.minutes : null));
       return mode === "total" ? (p.minutes ? x * p.minutes / 90 : null) : x;
     };
-    const isAvg = k => { const l = labels[k] || {}; return ["double", "percent", "rating"].includes(l.type) || /rating|percent|accuracy|pct/.test(k); };   // averages: no per-90 or total
+    const isAvg = k => { const l = labels[k] || {}; if (/^(expected_|xg)/.test(k)) return false;                 // v35: xG and xA are totals (per 90 and total)
+      return ["double", "percent", "rating"].includes(l.type) || /rating|percent|accuracy|pct/.test(k); };   // averages: no per-90 or total
     const hasData = k => (L.players || []).some(p => val(p, k, "total") != null);
     const def = ["goals", "expected_goals"].find(k => keys.includes(k) && hasData(k)) || keys.find(hasData) || keys[0];
     let [sortKey, sortMode, dir] = store.get("leaders_sort2:" + slug, [def, "p90", -1]);
