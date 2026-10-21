@@ -22,13 +22,15 @@ def _results(ns):
         if d is not None and len(d):
             parts.append(d[["League", "Season", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"]])
             season_of[lg] = str(info.get("season"))
-    # v33: European cups, league phase only (mid-September to the end of January: the single 36-team table)
+    # v33: European cups, league phase only (September to the end of January: the single 36-team table)
+    # v35: from 1 September (it was 10 September, which dropped matchday 1 when it started earlier: wrong table and matchday numbers);
+    #      the qualifying rounds end in late August
     eu = ns.get("euro")
     if eu is not None and len(eu) and {"Competition", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"}.issubset(eu.columns):
         e = eu.dropna(subset=["FTHG", "FTAG"]).copy()
         e["Date"] = pd.to_datetime(e["Date"]).dt.normalize()
         y = e["Date"].dt.year - (e["Date"].dt.month < 7).astype(int)
-        start, end = pd.to_datetime(y.astype(str) + "-09-10"), pd.to_datetime((y + 1).astype(str) + "-01-31")
+        start, end = pd.to_datetime(y.astype(str) + "-09-01"), pd.to_datetime((y + 1).astype(str) + "-01-31")
         e = e[(e["Date"] >= start) & (e["Date"] <= end)]
         e["Season"] = y.loc[e.index].map(lambda v: f"{str(v)[2:]}{str(v + 1)[2:]}")
         parts.append(e.rename(columns={"Competition": "League"})[["League", "Season", "Date", "HomeTeam", "AwayTeam", "FTHG", "FTAG"]])

@@ -268,3 +268,19 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .kpred .bar { margin-left: 0; }
 .kpred .bar-legend { margin-left: 0; color: var(--ink); }
 .kpred .bar-legend span b { display: block; font-size: 1.2rem; }
+/* v35: pinned bars under the header: the competition's name and tabs, and the match page's slim scoreboard with its tabs */
+.compbar { position: sticky; top: var(--hdr, 57px); z-index: 4; background: var(--bg); margin: -1rem -1rem 0; padding: .6rem 1rem .1rem; border-bottom: 1px solid var(--line); }
+.compbar h1 { font-size: clamp(1.45rem, 5.5vw, 2rem); margin: 0 0 .2rem; }
+.compbar .season { font-size: .55em; font-weight: 600; font-stretch: 90%; margin-left: .3rem; }
+.compbar .tabs { margin: .3rem 0 .4rem; }
+.compbar .tabs.rounds button { min-width: 2.4rem; }
+.mstick { position: sticky; top: var(--hdr, 57px); z-index: 4; background: var(--bg); margin: 1rem -1rem 0; padding: 0 1rem; border-bottom: 1px solid var(--line); }
+.mstick .mtabs { position: static; margin: 0; padding: 0; border-bottom: 0; }
+.minibar { display: none; align-items: center; gap: .45rem; padding: .45rem 0 .2rem; font-stretch: 90%; }
+.mstick.show .minibar { display: flex; }
+.minibar .badge { width: 1.6rem; height: 1.6rem; font-size: .55rem; }
+.minibar .mn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .95rem; }
+.minibar .mn.r { text-align: right; }
+.minibar .ms { flex: none; text-align: center; font-size: 1.05rem; }
+.minibar .ms .live { color: var(--warn); font-weight: 700; font-size: .85rem; }
+.minibar .ms .muted { font-size: .85rem; }

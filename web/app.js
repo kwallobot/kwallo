@@ -256,12 +256,12 @@
     const rounds = c.rounds || [];
     const cur = round != null && round !== "" ? String(round) : String(c.current_round ?? (rounds.length ? rounds[rounds.length - 1].round : ""));
     const t = (k, l) => `<button class="${tab === k ? "on" : ""}" data-go="#/comp/${slug}/${k}">${l}</button>`;
-    let body = "";
+    let body = "", roundBar = "";
     if (tab === "matches") {
       // v35: cups' rounds have names ("Next matches", "Round of 16"); never "null". The stars sit either side of the fixture.
       const r = rounds.find(x => String(x.round) === cur) || rounds[rounds.length - 1];
-      body = r ? `<div class="tabs">${rounds.map(x => `<button class="${x.round === r.round ? "on" : ""}" data-go="#/comp/${slug}/matches/${encodeURIComponent(x.round)}" aria-label="${esc(roundTitle(x))}">${esc(x.name || x.round)}</button>`).join("")}</div>
-        <h2>${esc(roundTitle(r))}</h2><ul class="list">${r.matches.map(m => `<li class="num">${esc(m.date)}:
+      roundBar = r ? `<div class="tabs rounds" data-rounds>${rounds.map(x => `<button class="${x.round === r.round ? "on" : ""}" data-go="#/comp/${slug}/matches/${encodeURIComponent(x.round)}" aria-label="${esc(roundTitle(x))}">${esc(x.name || x.round)}</button>`).join("")}</div>` : "";
+      body = r ? `<h2>${esc(roundTitle(r))}</h2><ul class="list">${r.matches.map(m => `<li class="num">${esc(m.date)}:
           ${teamStar(m.home_slug, m.home)}<a href="#/team/${esc(m.home_slug)}">${esc(m.home)}</a> ${m.played ? `<b>${esc(m.score)}</b>` : "v"} <a href="#/team/${esc(m.away_slug)}">${esc(m.away)}</a>${teamStar(m.away_slug, m.away)}
           ${m.slug ? ` <a class="small" href="#/match/${esc(m.slug)}">Prediction</a>` : ""}</li>`).join("")}</ul>` : empty("No matchdays yet.");
     } else if (tab === "table") {
@@ -272,9 +272,10 @@
     } else {
       body = await leadersTable(slug);
     }
-    app.innerHTML = `<h1 class="title-row"><span>${esc(c.name)}</span><button class="star ${fav.has("comp:" + slug) ? "on" : ""}" data-fav="comp:${esc(slug)}" aria-label="Favourite ${esc(c.name)}" title="Favourite">★</button></h1>
-      ${c.season ? `<p class="muted">Season ${esc(fmtSeason(c.season))}</p>` : ""}
-      <div class="tabs">${t("matches", "Matchdays")}${t("table", "Table")}${t("leaders", "Leaders")}</div>${body}`;
+    // v35: the competition's name, season, tabs and matchday numbers stay pinned under the header while scrolling
+    app.innerHTML = `<div class="compbar"><h1 class="title-row"><span>${esc(c.name)}${c.season ? ` <small class="muted season">${esc(fmtSeason(c.season))}</small>` : ""}</span><button class="star ${fav.has("comp:" + slug) ? "on" : ""}" data-fav="comp:${esc(slug)}" aria-label="Favourite ${esc(c.name)}" title="Favourite">★</button></h1>
+      <div class="tabs">${t("matches", "Matchdays")}${t("table", "Table")}${t("leaders", "Leaders")}</div>${roundBar}</div>${body}`;
+    afterRender = () => { const b = shell.querySelector("[data-rounds] button.on"), bar = shell.querySelector("[data-rounds]"); if (b && bar) bar.scrollLeft = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2); };
     hit("competition");
   }
 
@@ -510,7 +511,7 @@
     root.querySelectorAll("[data-tab]").forEach(s => { s.hidden = s.dataset.tab !== key; });
     links.forEach(a => { const on = a.dataset.k === key; a.classList.toggle("on", on); a.setAttribute("aria-selected", String(on)); });
     const on = links.find(a => a.dataset.k === key), hdr0 = document.querySelector("header.top");
-    if (hdr0) bar.style.top = hdr0.offsetHeight + "px";                // sticks right under the header, whatever its height on this screen
+    if (hdr0) document.documentElement.style.setProperty("--hdr", hdr0.offsetHeight + "px");   // pinned bars sit right under the header, whatever its height
     bar.scrollLeft = Math.max(0, on.offsetLeft - (bar.clientWidth - on.offsetWidth) / 2);   // the chosen tab stays in view
     if (byUser) {
       try { history.replaceState(null, "", `#/match/${root.dataset.slug}/${key}`); } catch (e) {}
@@ -560,7 +561,10 @@
         ${m.ExpHome != null ? `<p class="muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}.</p>` : ""}
       </section>
       <div id="tabanchor"></div>
-      <nav class="mtabs" role="tablist">${TABS_.map(([k, l]) => `<a role="tab" data-k="${k}" href="#/match/${esc(slug)}/${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</a>`).join("")}</nav>
+      <div class="mstick"><div class="minibar" aria-hidden="true">${badge(Object.assign({}, m, mb_), "home")}<b class="mn">${esc(H)}</b>
+          <span class="ms num">${L0 && L0.state !== "pre" ? `<b>${L0.hs}–${L0.as}</b>${L0.state === "in" ? ` <span class="live">${esc(L0.detail || "")}</span>` : ` <span class="muted">${esc(L0.detail || "FT")}</span>`}` : `<b>${esc(timeOf(m))}</b>`}</span>
+          <b class="mn r">${esc(A)}</b>${badge(Object.assign({}, m, mb_), "away")}</div>
+        <nav class="mtabs" role="tablist">${TABS_.map(([k, l]) => `<a role="tab" data-k="${k}" href="#/match/${esc(slug)}/${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</a>`).join("")}</nav></div>
       <div id="mroot" data-slug="${esc(slug)}" data-h="${esc(H)}" data-a="${esc(A)}" data-hs="${esc(hs)}" data-as="${esc(as)}" data-ev="${hasEv ? esc(ev0.code + ":" + ev0.id) : ""}"
            data-live="${L0 && L0.state === "in" ? 1 : 0}" data-started="${started ? 1 : 0}" data-coach-h="${esc(coach.home || "")}" data-coach-a="${esc(coach.away || "")}">
       <section class="section" data-tab="overview">
@@ -936,6 +940,15 @@
 
   // ---------- router
   let afterRender = null;                                           // v35: a page's follow-up once it's on screen (the match page's tabs)
+  // v35: on a match page, the slim scoreboard (badges, score or kick-off, the minute) appears in the pinned bar once the big one scrolls away
+  function onScrollPin() {
+    const st = shell.querySelector(".mstick"), hero = shell.querySelector(".hero");
+    if (!st || !hero) return;
+    const hdr = document.querySelector("header.top");
+    st.classList.toggle("show", hero.getBoundingClientRect().bottom < (hdr ? hdr.offsetHeight : 0) + 8);
+  }
+  window.addEventListener("scroll", onScrollPin, { passive: true });
+  window.addEventListener("resize", () => { const h = document.querySelector("header.top"); if (h) document.documentElement.style.setProperty("--hdr", h.offsetHeight + "px"); }, { passive: true });
   async function route(keepScroll) {
     const my = ++routeSeq;
     afterRender = null;
@@ -967,6 +980,8 @@
     }
     if (my === routeSeq) { shell.innerHTML = app.innerHTML; try { shell.focus({ preventScroll: true }); } catch (e) {}   // a newer page won: drop this one
       app = shell;
+      const hdr1 = document.querySelector("header.top"); if (hdr1) document.documentElement.style.setProperty("--hdr", hdr1.offsetHeight + "px");   // v35
+      onScrollPin();
       if (afterRender) { const f = afterRender; afterRender = null; try { f(); } catch (e) {} } }
     app = shell;
   }
