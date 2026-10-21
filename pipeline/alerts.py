@@ -44,6 +44,18 @@ def _send(token, chat_id, text):
 def _pct(p):
     return f"{100 * p:.0f}%" if p is not None else "-"
 
+# v35: times in Nigerian time (WAT, UTC+1), labelled, for the bot and the channel (they used to be UTC without saying so)
+WAT = pd.Timedelta(hours=1)
+def _wat(kickoff):
+    """A kickoff ("2026-10-21T23:00:00Z") in Nigerian time, as a plain timestamp."""
+    return pd.Timestamp(kickoff).tz_localize(None) + WAT if pd.Timestamp(kickoff).tzinfo is None else pd.Timestamp(kickoff).tz_convert(None) + WAT
+def _ko(m, day=None):
+    """'17:45 WAT', or 'Thu 00:00 WAT' when it falls on another (Nigerian) day than `day`; 'time TBC' without a kickoff time."""
+    if not m.get("kickoff"):
+        return "time TBC"
+    t = _wat(m["kickoff"])
+    return f"{t:%H:%M} WAT" if day is None or t.strftime("%Y-%m-%d") == day else f"{t:%a %H:%M} WAT"
+
 def _xi_line(xi, side):
     e = (xi or {}).get(side) or {}
     names = [p["Player"].split(" ")[-1] for p in e.get("ours", [])][:11]
@@ -51,8 +63,9 @@ def _xi_line(xi, side):
 
 def preview_text(d, site):
     m, v = d["match"], d.get("verdict") or {}
+    ko = _wat(m["kickoff"]).strftime("%a %d %b, %H:%M") + " WAT" if m.get("kickoff") else m["Date"][:10] + ", time TBC"
     lines = [f"<b>{html.escape(m['Home'])} v {html.escape(m['Away'])}</b> · {html.escape(m['Competition'])}",
-             f"Kickoff: {m['kickoff'][11:16] + ' UTC' if m.get('kickoff') else m['Date'][:10]}",
+             f"Kickoff: {ko}",
              f"Chances: {html.escape(m['Home'])} {_pct(m.get('pH'))} · draw {_pct(m.get('pD'))} · {html.escape(m['Away'])} {_pct(m.get('pA'))}"]
     if v.get("best") and not PREMIUM_ENABLED:                     # v31: the top angle is premium once premium launches
         b = v["best"][0]
@@ -76,7 +89,7 @@ def lineups_text(d, site):
         b = v["best"][0]
         lines.append(f"Top angle now: {html.escape(b['Bet'])} ({_pct(b['p'])}, worth it at {b['fair']:.2f} or better)")
     if m.get("kickoff"):
-        lines.append(f"Kickoff {m['kickoff'][11:16]} UTC")
+        lines.append(f"Kickoff {_ko(m)}")
     if site:
         lines.append(f'<a href="{site.rstrip("/")}/#/match/{m["slug"]}/lineups">Match page</a>')
     return "\n".join(lines)
@@ -160,10 +173,35 @@ def _free_pick(m, data_dir):
         return safer
     return None
 
+def _match_lines(ms, data_dir, day):
+    """v35: a digest's body: matches grouped by competition (big competitions first), each with its top angle (or, with premium on,
+    basic chances and one free pick); capped so the message fits."""
+    lines, by_comp, shown = [], {}, 0
+    for m in sorted(ms, key=lambda m: (m["Competition"] not in BIG_COMPS, m.get("kickoff") or "", m["Competition"])):
+        by_comp.setdefault(m["Competition"], []).append(m)
+    for comp, cms in by_comp.items():
+        if shown >= 25:
+            break
+        lines.append(f"<b>{html.escape(comp)}</b>")
+        for m in cms[:6]:
+            tp = m.get("top_pick") or {}
+            ko = (_ko(m, day).replace(" WAT", "") + " ") if m.get("kickoff") else ""
+            if PREMIUM_ENABLED:                                        # v31: basic chances plus one non-top pick per match
+                fp = _free_pick(m, data_dir)
+                lines.append(f"{ko}{html.escape(m['Home'])} v {html.escape(m['Away'])}: {_pct(m.get('pH'))} · draw {_pct(m.get('pD'))} · {_pct(m.get('pA'))}"
+                             + (f" · <i>Pick:</i> {html.escape(fp['Bet'])} {_pct(fp['p'])} (fair {fp['fair']:.2f})" if fp else ""))
+            else:
+                lines.append(f"{ko}{html.escape(m['Home'])} v {html.escape(m['Away'])}" + (f": {html.escape(tp['Bet'])} {_pct(tp['p'])} (fair {tp['fair']:.2f})" if tp else ""))
+            shown += 1
+        lines.append("")
+    return lines
+
 def channel_posts(data_dir, mode):
+    """The public channel. v35: in this order each morning: yesterday's results, today's digest, big-match previews, and (Mondays)
+    the weekly track record; plus an evening update (about 18:00 WAT) from the lineup-time runs. Times in Nigerian time (WAT)."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     channel = os.environ.get("TELEGRAM_CHANNEL") or "@kwallo_official"
-    if not token or mode == "lineups":
+    if not token:
         return
     site = os.environ.get("SITE_URL", "")
     idx_p = os.path.join(data_dir, "site", "index.json")
@@ -173,75 +211,74 @@ def channel_posts(data_dir, mode):
     log_path = os.path.join(data_dir, "channel_sent.json")
     sent = json.load(open(log_path)) if os.path.exists(log_path) else {}
     now = pd.Timestamp.now("UTC").tz_convert(None)
-    today, yday = now.strftime("%Y-%m-%d"), (now - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    yday = (now - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    now_w = now + WAT
+    today_w = now_w.strftime("%Y-%m-%d")
+    until_w = pd.Timestamp(today_w) + pd.Timedelta(days=1, hours=7)            # the window ends at 07:00 WAT tomorrow
+    upcoming = lambda m: (now_w <= _wat(m["kickoff"]) < until_w) if m.get("kickoff") else m["Date"][:10] == today_w
     n = 0
-    # 1. morning digest: today's matches with their top angle (grouped by competition, capped so it fits one message)
-    todays = [m for m in idx["matches"] if m["Date"][:10] == today]
-    if todays:
-        lines = [f"☀️ <b>Kwallo · {now:%A %d %B}</b>", ("<i>football, decoded.</i> Today's chances, with a free pick for each match:" if PREMIUM_ENABLED else "<i>football, decoded.</i> Today's top angles, with fair odds:"), ""]
-        by_comp = {}
-        for m in sorted(todays, key=lambda m: (m["Competition"] not in BIG_COMPS, m.get("kickoff") or "", m["Competition"])):
-            by_comp.setdefault(m["Competition"], []).append(m)
-        shown = 0
-        for comp, ms in by_comp.items():
-            if shown >= 25:
-                break
-            lines.append(f"<b>{html.escape(comp)}</b>")
-            for m in ms[:6]:
-                tp = m.get("top_pick") or {}
-                ko = f"{m['kickoff'][11:16]} " if m.get("kickoff") else ""
-                if PREMIUM_ENABLED:                                    # v31: basic chances plus one non-top pick per match
-                    fp = _free_pick(m, data_dir)
-                    lines.append(f"{ko}{html.escape(m['Home'])} v {html.escape(m['Away'])}: {_pct(m.get('pH'))} · draw {_pct(m.get('pD'))} · {_pct(m.get('pA'))}"
-                                 + (f" · <i>Pick:</i> {html.escape(fp['Bet'])} {_pct(fp['p'])} (fair {fp['fair']:.2f})" if fp else ""))
-                else:
-                    lines.append(f"{ko}{html.escape(m['Home'])} v {html.escape(m['Away'])}" + (f": {html.escape(tp['Bet'])} {_pct(tp['p'])} (fair {tp['fair']:.2f})" if tp else ""))
-                shown += 1
-            lines.append("")
-        lines.append("<i>Model probabilities, not guarantees. Worth it only above the fair odds. 18+.</i>")
-        n += _post(token, channel, "\n".join(lines)[:4000], sent, f"digest|{today}")
-    # 2. big-match previews: up to three headline games kicking off in the next 6-30 hours
-    soon = []
-    for m in idx["matches"]:
-        if not m.get("kickoff"):
-            continue
-        h = (pd.Timestamp(m["kickoff"]).tz_localize(None) - now).total_seconds() / 3600
-        if 6 <= h <= 30 and m["Competition"] in BIG_COMPS:
-            closeness = 1 - abs((m.get("pH") or 0) - (m.get("pA") or 0))
-            soon.append((closeness + (0.3 if "Champions" in m["Competition"] else 0), m))
-    for _, m in sorted(soon, key=lambda x: -x[0])[:3]:
-        d_path = os.path.join(data_dir, "site", "match", f"{m['slug']}.json")
-        if os.path.exists(d_path):
-            n += _post(token, channel, "🔥 <b>Big match</b>\n" + preview_text(json.load(open(d_path)), site), sent, f"preview|{m['slug']}")
-    # 3. yesterday's results: how the top angles did, against what the model expected
-    vl = os.path.join(data_dir, "verdict_log.csv")
-    if os.path.exists(vl):
-        v = pd.read_csv(vl)
+    if mode != "lineups":
+        # 1. yesterday's results: how the top angles did, against what the model expected (before today's digest)
+        vl = os.path.join(data_dir, "verdict_log.csv")
+        v = pd.read_csv(vl) if os.path.exists(vl) else pd.DataFrame()
         if "won" in v:
             yall = v[(v["Date"].astype(str) == yday) & (v["kind"] == "best")]
             yv = yall.dropna(subset=["won"])
             pending = len(yall) - len(yv)
-            if not len(yv):                                       # v33: never silent, so "nothing to report" is visible
+            if not len(yv):                                           # v33: never silent, so "nothing to report" is visible
                 txt = (f"🏁 <b>Yesterday's top angles</b>: " + (f"none settled yet ({pending} still waiting for final scores; they'll be counted in the track record)."
                                                                if pending else "no settled picks from yesterday."))
                 n += _post(token, channel, txt, sent, f"results|{yday}")
-            if len(yv) >= 1:
+            else:
                 rows = [f"{'✅' if r.won > 0 else '❌'} {html.escape(str(r.Home))} v {html.escape(str(r.Away))}: {html.escape(str(r.Bet))} ({_pct(r.p)})" for r in yv.head(20).itertuples()]
                 txt = (f"🏁 <b>Yesterday's top angles</b>: {int(yv['won'].sum())} of {len(yv)} landed "
-                       f"({100 * yv['won'].mean():.0f}% vs {100 * yv['p'].mean():.0f}% the model expected)\n\n" + "\n".join(rows) + (f'\n\n<a href="{os.environ.get("SITE_URL", "").rstrip("/")}/#/track">Full track record</a>' if os.environ.get("SITE_URL") else "")
+                       f"({100 * yv['won'].mean():.0f}% vs {100 * yv['p'].mean():.0f}% the model expected)\n\n" + "\n".join(rows) + (f'\n\n<a href="{site.rstrip("/")}/#/track">Full track record</a>' if site else "")
                        + (f"\n\n{pending} more still waiting for final scores." if pending else "")
                        + "\n\n<i>A hit rate close to the expected one means the probabilities are honest. 18+.</i>")
                 n += _post(token, channel, txt[:4000], sent, f"results|{yday}")
-            # 4. Mondays (full run): the week's track record
-            if mode == "full":
-                wk = v[(pd.to_datetime(v["Date"]) >= now - pd.Timedelta(days=7)) & (v["kind"] == "best")].dropna(subset=["won"])
-                allv = v[v["kind"] == "best"].dropna(subset=["won"])
-                if len(wk) >= 10:
-                    txt = (f"📊 <b>Kwallo weekly track record</b>\nLast 7 days: top angles landed {100 * wk['won'].mean():.0f}% "
-                           f"(the model expected {100 * wk['p'].mean():.0f}%), {len(wk)} picks.\nSince launch: {100 * allv['won'].mean():.0f}% vs "
-                           f"{100 * allv['p'].mean():.0f}% expected, {len(allv)} picks.\n\n<i>We publish every pick, hits and misses. 18+.</i>"
-                           + (f'\n<a href="{os.environ.get("SITE_URL", "").rstrip("/")}/#/track">Full track record</a>' if os.environ.get("SITE_URL") else ""))
-                    n += _post(token, channel, txt, sent, f"weekly|{now:%G-W%V}")
+        # 2. the morning digest: from now (when it's posted) until 07:00 WAT tomorrow, so games that kick off before the next digest is out
+        #    (late games in the Americas, after midnight in Nigeria) come in this one; a match already listed in a digest isn't listed again
+        todays = [m for m in idx["matches"] if upcoming(m) and f"listed|{m['slug']}" not in sent]
+        if todays and f"digest|{today_w}" not in sent:
+            lines = [f"☀️ <b>Kwallo · {now_w:%A %d %B}</b>", ("<i>football, decoded.</i> Today's chances, with a free pick for each match:" if PREMIUM_ENABLED else "<i>football, decoded.</i> Today's top angles, with fair odds:")
+                     + " <i>Times are Nigerian time (WAT).</i>", ""] + _match_lines(todays, data_dir, today_w)
+            lines.append("<i>Model probabilities, not guarantees. Worth it only above the fair odds. 18+.</i>")
+            if _post(token, channel, "\n".join(lines)[:4000], sent, f"digest|{today_w}"):
+                n += 1
+                for m in todays:
+                    sent[f"listed|{m['slug']}"] = now.isoformat()
+        # 3. big-match previews: up to three headline games kicking off in the next 6-30 hours
+        soon = []
+        for m in idx["matches"]:
+            if not m.get("kickoff"):
+                continue
+            h = (pd.Timestamp(m["kickoff"]).tz_localize(None) - now).total_seconds() / 3600
+            if 6 <= h <= 30 and m["Competition"] in BIG_COMPS:
+                closeness = 1 - abs((m.get("pH") or 0) - (m.get("pA") or 0))
+                soon.append((closeness + (0.3 if "Champions" in m["Competition"] else 0), m))
+        for _, m in sorted(soon, key=lambda x: -x[0])[:3]:
+            d_path = os.path.join(data_dir, "site", "match", f"{m['slug']}.json")
+            if os.path.exists(d_path):
+                n += _post(token, channel, "🔥 <b>Big match</b>\n" + preview_text(json.load(open(d_path)), site), sent, f"preview|{m['slug']}")
+        # 4. Mondays (full run): the week's track record
+        if mode == "full" and "won" in v:
+            wk = v[(pd.to_datetime(v["Date"]) >= now - pd.Timedelta(days=7)) & (v["kind"] == "best")].dropna(subset=["won"])
+            allv = v[v["kind"] == "best"].dropna(subset=["won"])
+            if len(wk) >= 10:
+                txt = (f"📊 <b>Kwallo weekly track record</b>\nLast 7 days: top angles landed {100 * wk['won'].mean():.0f}% "
+                       f"(the model expected {100 * wk['p'].mean():.0f}%), {len(wk)} picks.\nSince launch: {100 * allv['won'].mean():.0f}% vs "
+                       f"{100 * allv['p'].mean():.0f}% expected, {len(allv)} picks.\n\n<i>We publish every pick, hits and misses. 18+.</i>"
+                       + (f'\n<a href="{site.rstrip("/")}/#/track">Full track record</a>' if site else ""))
+                n += _post(token, channel, txt, sent, f"weekly|{now:%G-W%V}")
+    # 5. v35: the evening update, once a day from the first run between 17:00 and 22:00 WAT (usually a lineup-time run): tonight's and the
+    #    early-morning games still to come, with their latest top angles (updated with confirmed lineups where they're out)
+    if 17 <= now_w.hour < 22 and f"evening|{today_w}" not in sent:
+        tonight = [m for m in idx["matches"] if m.get("kickoff") and now_w <= _wat(m["kickoff"]) < until_w]
+        if tonight:
+            lines = [f"🌙 <b>Kwallo · tonight and overnight</b>", "<i>Still to come, with the latest top angles (updated with team news and lineups). Times are Nigerian time (WAT).</i>", ""]
+            lines += _match_lines(tonight, data_dir, today_w)
+            lines.append("<i>Model probabilities, not guarantees. Worth it only above the fair odds. 18+.</i>")
+            n += _post(token, channel, "\n".join(lines)[:4000], sent, f"evening|{today_w}")
     sent = {k: s for k, s in sent.items() if pd.Timestamp(s) > now - pd.Timedelta(days=30)}
     json.dump(sent, open(log_path, "w"))
     print(f"Channel {channel}: {n} posts this run.")
