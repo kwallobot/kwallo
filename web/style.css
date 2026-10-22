@@ -296,6 +296,21 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .pitchfig .poff { font: 700 8.5px var(--font); fill: var(--bad); }
 .pitchfig .pon { font: 700 8px var(--font); fill: var(--good); }
 .pitchfig .psj { font: 800 7.5px var(--font); font-stretch: 80%; }
+/* v35: market prices as tappable cells: an over / under grid and rows of cells; the likelier side tinted mint (--t, 0 to 1),
+   a cell in the accumulator filled mint with a ✓ */
+.ougrid { display: grid; grid-template-columns: minmax(3.6rem, 30%) 1fr 1fr; gap: 6px; margin: .4rem 0 1.1rem; }
+.ougrid .oh { text-align: center; color: var(--muted); font-size: .85rem; font-weight: 600; padding: .35rem 0; background: var(--surface); border-radius: 8px; }
+.ougrid .ol { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: var(--surface); border-radius: 8px; padding: .3rem .4rem; line-height: 1.2; }
+.ougrid .ol b { font-size: 1.02rem; } .ougrid .ol small { color: var(--muted); font-size: .72rem; }
+.mcells { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 6px; margin: .4rem 0 1.1rem; }
+.mcell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .1rem; min-height: 3.2rem; padding: .45rem .3rem; cursor: pointer;
+         border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font: inherit; background: color-mix(in srgb, var(--brand) calc(var(--t, 0) * 30%), var(--surface)); }
+.mcell .ml { font-size: .8rem; color: var(--muted); text-align: center; line-height: 1.2; overflow-wrap: anywhere; }
+.mcell .mo { color: var(--brand); font-size: 1.08rem; font-weight: 750; }
+.mcell .mp { color: var(--muted); font-size: .75rem; }
+.mcell:hover { border-color: var(--brand); }
+.mcell.added { background: var(--brand); border-color: var(--brand); }
+.mcell.added .mo, .mcell.added .mp, .mcell.added .ml { color: var(--bg); }
 /* v35: not rated by PitchAPI (on for the last few minutes): a grey chip */
 .rchip.r0 { background: #A9B5B0; } .pitchfig .prn { fill: #A9B5B0; }
 /* v35: smooth swipes between dates and tabs: the page leaves sideways moves to the site (up-and-down scrolling and zoom stay the browser's),

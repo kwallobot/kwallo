@@ -114,6 +114,20 @@
   }
   const selId = (slug, bet) => `${slug}|${bet}`;
   function accaBtn(sel) { return `<button class="btn mini ${acca.has(sel.id) ? "added" : ""}" data-acca="${esc(JSON.stringify(sel))}" aria-label="${acca.has(sel.id) ? "Remove from" : "Add to"} accumulator">${acca.has(sel.id) ? "✓ In acca" : "+ Acca"}</button>`; }
+  // v35: prices as cells: fair odds big, the chance small; tap to add to the accumulator (again to remove). The likelier side is tinted
+  //      mint, more strongly the likelier it is (n: how many outcomes share the market)
+  const lean = (p, n) => Math.max(0, Math.min(1, (p - 1 / n) / (1 - 1 / n)));
+  function mcell(sel, label, t) {
+    const on = acca.has(sel.id);
+    return `<button class="mcell ${on ? "added" : ""}" style="--t:${(t || 0).toFixed(2)}" data-acca="${esc(JSON.stringify(sel))}" aria-pressed="${on}" aria-label="${esc(sel.bet)}: ${pct(sel.p)}, fair odds ${odds(sel.fair)}">
+      ${label != null ? `<span class="ml">${esc(label)}</span>` : ""}<b class="mo num">${on ? "✓ " : ""}${odds(sel.fair)}</b><span class="mp num">${pct(sel.p)}</span></button>`;
+  }
+  function ouGrid(rows) {                                           // rows: [line, notes, over, under]; like a bookmaker's over/under table
+    return `<div class="ougrid"><span></span><span class="oh">Over</span><span class="oh">Under</span>${rows.map(([l, notes, o, u]) =>
+      `<span class="ol"><b class="num">${esc(l)}</b>${(notes || []).filter(Boolean).map(n => `<small>${esc(n)}</small>`).join("")}</span>${mcell(o, null, lean(o.p, 2))}${u ? mcell(u, null, lean(u.p, 2)) : "<span></span>"}`).join("")}</div>`;
+  }
+  const cellRow = (cells, cols) => `<div class="mcells" style="--n:${cols || cells.length}">${cells.join("")}</div>`;
+  const inv = p => (p > 0 ? 1 / p : null);
   function alertsLink(slug, label) {
     return C.bot ? `<a class="btn solid cta-tg" href="${tg(C.bot + "?start=team_" + encodeURIComponent(slug))}" target="_blank" rel="noopener">${esc(label)}</a>` : "";
   }
@@ -395,9 +409,18 @@
     if (!m.Grid) return "";
     const gm = gridMarkets(m.Grid, H, A), g = {};
     gm.forEach(([f, b, p]) => (g[f] = g[f] || []).push([b, p]));
-    return `<section class="section" data-tab="goals"><h2>Goal markets</h2><p class="small muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}, total ${(Number(m.ExpHome) + Number(m.ExpAway)).toFixed(2)}.</p>`
-      + Object.entries(g).map(([f, xs]) => `<h3>${esc(f)}</h3><div class="wrap"><table><tbody>${xs.map(([b, p]) => `<tr><td>${esc(b)}</td><td class="r num">${pct(p)}</td><td class="r num">${odds(p > 0 ? 1 / p : null)}</td>
-          <td class="r">${accaBtn(sel(`${f}: ${b}`, p, p > 0 ? 1 / p : null))}</td></tr>`).join("")}</tbody></table></div>`).join("") + `</section>`;
+    const S = (f, b, p) => sel(`${f}: ${b}`, p, inv(p));             // (the same names as before, so accumulators already built still match)
+    const short = b => b.replace(/ (keep a clean sheet|win to nil|win and both score)$/, "").replace(/ win by /, " by ").replace(/ or more$/, "+").replace(/ goals$/, "");
+    const body = Object.entries(g).map(([f, xs]) => {
+      if (xs.every(([b]) => /^(Over|Under) [\d.]+$/.test(b))) {      // over / under lines: the grid
+        const lines = [...new Set(xs.map(([b]) => b.split(" ")[1]))];
+        return `<h3>${esc(f)}</h3>${ouGrid(lines.map(l => { const o = xs.find(([b]) => b === `Over ${l}`), u = xs.find(([b]) => b === `Under ${l}`);
+          return [l, [], S(f, o[0], o[1]), u ? S(f, u[0], u[1]) : null]; }))}`;
+      }
+      return `<h3>${esc(f)}</h3>${cellRow(xs.map(([b, p]) => mcell(S(f, b, p), short(b), lean(p, xs.length))))}`;
+    }).join("");
+    return `<section class="section" data-tab="goals"><h2>Goal markets</h2><p class="small muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}, total ${(Number(m.ExpHome) + Number(m.ExpAway)).toFixed(2)}.
+      Each price is the fair odds (the chance below it); tap one to add it to your accumulator.</p>${body}</section>`;
   }
   function timingBlock(t, H, A) {                                   // v35: goals by 15-minute period
     if (!t || !(t.p_goal || []).length) return "";
@@ -633,19 +656,28 @@
       ${m.Grid ? `<section class="section" data-tab="markets"><h2>Score grid</h2>${gridTable(m.Grid, H, A)}</section>` : ""}
       ${timingBlock(d.timing, H, A)}
       ${goalsMarketsBlock(m, H, A, sel)}
-      ${m.ExpCorners != null || m.ExpCards != null ? `<section class="section" data-tab="goals"><h2>Corners and cards</h2><div class="wrap"><table><tbody>
-          ${m.ExpCorners != null ? `<tr><td>Expected corners</td><td class="r num">${Number(m.ExpCorners).toFixed(1)}</td><td></td></tr>` : ""}
-          ${m.pOverCorners != null ? `<tr><td>Over 9.5 corners</td><td class="r num">${pct(m.pOverCorners)}</td><td class="r num">${odds(1 / m.pOverCorners)}</td></tr><tr><td>Under 9.5 corners</td><td class="r num">${pct(1 - m.pOverCorners)}</td><td class="r num">${odds(1 / (1 - m.pOverCorners))}</td></tr>` : ""}
-          ${m.ExpCards != null ? `<tr><td>Expected cards${m.ExpCardsH != null ? ` (${esc(H)} ${Number(m.ExpCardsH).toFixed(1)}, ${esc(A)} ${Number(m.ExpCardsA).toFixed(1)})` : ""}</td><td class="r num">${Number(m.ExpCards).toFixed(1)}</td><td></td></tr>` : ""}
-          ${m.pOverCards != null ? `<tr><td>Over 4.5 cards</td><td class="r num">${pct(m.pOverCards)}</td><td class="r num">${odds(1 / m.pOverCards)}</td></tr><tr><td>Under 4.5 cards</td><td class="r num">${pct(1 - m.pOverCards)}</td><td class="r num">${odds(1 / (1 - m.pOverCards))}</td></tr>` : ""}
-        </tbody></table></div></section>` : ""}
-      ${markets.length ? `<section class="section" data-tab="goals"><h2>More markets</h2>${Object.entries(fam).sort((x, y) => famRank(x[0]) - famRank(y[0])).map(([f, xs]) => `<h3>${esc(famName(f))}</h3><div class="wrap"><table><tbody>
-          ${xs.map(x => { const ex = (String(x.Bet).match(/\(expected ([\d.]+)\)/) || [])[1], base = String(x.Bet).replace(/\s*\(expected [\d.]+\)/, "");
-              const under = /\bover\b/i.test(base) ? base.replace(/\bover\b/i, m_ => m_[0] === "O" ? "Under" : "under") : null;
-              return `<tr><td>${esc(base)} <span class="tag ${x.trusted ? "trusted" : ""}">${x.trusted ? "trusted" : "experimental"}</span>${ex ? `<br><span class="small muted">Expected: ${esc(ex)}</span>` : ""}</td>
-                <td class="r num">${pct(x.p)}</td><td class="r num">${odds(x.fair)}</td><td class="r">${accaBtn(sel(base, x.p, x.fair))}</td></tr>`
-                + (under ? `<tr><td>${esc(under)}</td><td class="r num">${pct(1 - x.p)}</td><td class="r num">${odds(x.p < 1 ? 1 / (1 - x.p) : null)}</td><td class="r">${accaBtn(sel(under, 1 - x.p, x.p < 1 ? 1 / (1 - x.p) : null))}</td></tr>` : ""); }).join("")}</tbody></table></div>`).join("")}
-          <p class="small muted">Trusted markets have passed their calibration test; experimental ones are still being tested. "Under" lines are the other side of each market.</p></section>` : ""}
+      ${m.ExpCorners != null || m.ExpCards != null ? `<section class="section" data-tab="goals"><h2>Corners and cards</h2>
+        <p class="small muted">${[m.ExpCorners != null ? `Expected corners ${Number(m.ExpCorners).toFixed(1)}` : "",
+          m.ExpCards != null ? `expected cards ${Number(m.ExpCards).toFixed(1)}${m.ExpCardsH != null ? ` (${esc(H)} ${Number(m.ExpCardsH).toFixed(1)}, ${esc(A)} ${Number(m.ExpCardsA).toFixed(1)})` : ""}` : ""].filter(Boolean).join(", ").replace(/^./, c => c.toUpperCase())}.</p>
+        ${m.pOverCorners != null || m.pOverCards != null ? ouGrid([
+          ...(m.pOverCorners != null ? [["9.5", ["corners"], sel("Over 9.5 corners", m.pOverCorners, inv(m.pOverCorners)), sel("Under 9.5 corners", 1 - m.pOverCorners, inv(1 - m.pOverCorners))]] : []),
+          ...(m.pOverCards != null ? [["4.5", ["cards"], sel("Over 4.5 cards", m.pOverCards, inv(m.pOverCards)), sel("Under 4.5 cards", 1 - m.pOverCards, inv(1 - m.pOverCards))]] : [])]) : ""}
+        </section>` : ""}
+      ${markets.length ? `<section class="section" data-tab="goals"><h2>More markets</h2>${Object.entries(fam).sort((x, y) => famRank(x[0]) - famRank(y[0])).map(([f, xs]) => {
+          // v35: lines ("Over 4.5 total offsides", "Al Hazem over 2.5 offsides") as the over / under grid; the rest (players, first
+          //      scorer, a penalty) as cells two to a row. The trusted / experimental tag by the heading, or on each row when they're mixed
+          const allT = xs.every(x => x.trusted), noneT = !xs.some(x => x.trusted), rows = [], singles = [];
+          const tagOf = t => `<span class="tag ${t ? "trusted" : ""}">${t ? "trusted" : "experimental"}</span>`;
+          xs.forEach(x => { const ex = (String(x.Bet).match(/\(expected ([\d.]+)\)/) || [])[1], base = String(x.Bet).replace(/\s*\(expected [\d.]+\)/, "");
+            const mt = base.match(/^(.*?)\b[Oo]ver ([\d.]+)\b/);
+            if (mt) { const under = base.replace(/\bover\b/i, m_ => m_[0] === "O" ? "Under" : "under"), who = mt[1].trim();
+              rows.push([mt[2], [who || "Total", ex ? `expected ${ex}` : "", allT || noneT ? "" : (x.trusted ? "trusted" : "experimental")],
+                sel(base, x.p, x.fair), x.p < 1 ? sel(under, 1 - x.p, inv(1 - x.p)) : null]); }
+            else singles.push(mcell(sel(base, x.p, x.fair), base, 0)); });
+          const rank = r => (r[1][0] === "Total" ? 0 : r[1][0] === H ? 1 : r[1][0] === A ? 2 : 3);   // the match total, then home, then away
+          rows.sort((a, b) => rank(a) - rank(b) || parseFloat(a[0]) - parseFloat(b[0]));
+          return `<h3>${esc(famName(f))} ${allT || noneT ? tagOf(allT) : ""}</h3>${rows.length ? ouGrid(rows) : ""}${singles.length ? cellRow(singles, 2) : ""}`; }).join("")}
+          <p class="small muted">Trusted markets have passed their calibration test; experimental ones are still being tested. "Under" is the other side of each line.</p></section>` : ""}
       <section class="section" data-tab="lineups">
         ${sheetSoon ? `<div data-lineups-live></div>` : ""}
         ${xi ? `<div data-xi><h2>${confirmed ? "Lineups" : "Expected lineups"}</h2>
@@ -1144,6 +1176,11 @@
     if (el.dataset.acca) {
       acca.toggle(JSON.parse(el.dataset.acca));
       if (location.hash.startsWith("#/acca")) route();
+      else if (el.classList.contains("mcell")) {                     // v35: a price cell: filled mint with a ✓ while it's in the acca
+        const on = acca.has(JSON.parse(el.dataset.acca).id);
+        document.querySelectorAll(".mcell[data-acca]").forEach(c => { if (c.dataset.acca !== el.dataset.acca) return;
+          c.classList.toggle("added", on); c.setAttribute("aria-pressed", String(on)); c.querySelector(".mo").textContent = `${on ? "✓ " : ""}${odds(JSON.parse(c.dataset.acca).fair)}`; });
+      }
       else { el.classList.toggle("added"); el.textContent = el.classList.contains("added") ? "✓ In acca" : "+ Acca"; }
     }
   });
