@@ -427,7 +427,9 @@
   }
   // v35: xG under the score: Kwallo's estimate in play ("est."), the real figure once PitchAPI has the match
   const xgText = xg => xg && isFinite(xg.home) && isFinite(xg.away) ? `xG ${Number(xg.home).toFixed(2)} – ${Number(xg.away).toFixed(2)}${xg.source === "estimate" ? " <small>est.</small>" : ""}` : "";
-  const resultUrl = root => workerApi(`result?e=${encodeURIComponent(root.dataset.ev)}&m=${root.dataset.live === "1" || root.dataset.started !== "1" ? Math.floor(Date.now() / 60000) : "ft"}`);
+  // the version tag changes whenever the Worker's match data changes, so phones never keep showing a day-old saved copy
+  const DATA_V = "35f";
+  const resultUrl = root => workerApi(`result?e=${encodeURIComponent(root.dataset.ev)}&v=${DATA_V}&m=${root.dataset.live === "1" || root.dataset.started !== "1" ? Math.floor(Date.now() / 60000) : "ft"}`);
   function xgFill() {
     const root = shell.querySelector("#mroot");
     if (!root || !root.dataset.ev) return;
@@ -457,7 +459,8 @@
         `<span class="sc ${i === hit ? "hit" : ""}"><b>${s[0]}–${s[1]}</b> ${pct(s[2])}${i === hit ? ' <span class="won">✓</span>' : ""}</span>`).join(" · ")}</p>
       ${done && hit < 0 ? `<p class="small"><span class="lost">✗</span> The final score, ${esc(hs)}–${esc(as)}, wasn't in our top 5.</p>` : ""}`;
   }
-  const ratingChip = r => r == null ? "" : `<span class="rchip ${r >= 7.5 ? "r1" : r >= 7 ? "r2" : r >= 6.5 ? "r3" : "r4"}">${Number(r).toFixed(1)}</span>`;
+  // rated: the match has ratings, so a player without one (on for the last few minutes) gets a grey "–"
+  const ratingChip = (r, rated) => r == null ? (rated ? `<span class="rchip r0" title="Not rated">–</span>` : "") : `<span class="rchip ${r >= 7.5 ? "r1" : r >= 7 ? "r2" : r >= 6.5 ? "r3" : "r4"}">${Number(r).toFixed(1)}</span>`;
   function lineupsLive(R, H, A, hsl, asl, coach, colors) {         // v35: the official team sheet, bench and substitutions (ESPN)
     const L = (R || {}).lineups || [];
     const ok = L.length === 2 && L.every(l => (l.xi || []).length >= 11);
@@ -470,9 +473,13 @@
         <div class="stat-grid two"><div><h3>${esc(H)}</h3>${list(S.home, hsl)}</div><div><h3>${esc(A)}</h3>${list(S.away, asl)}</div></div>`;
     }
     const side = s => L.find(l => l.side === s) || {};
+    const rated = L.some(l => [...(l.xi || []), ...(l.bench || [])].some(p => p.rating != null));   // PitchAPI's ratings have arrived
     // v35: on the pitch: shirt number, rating, goals, assists, cards, and who came on for him (and when)
-    const asXI = l => ({ ours: (l.xi || []).map(p => { const sub = (l.bench || []).find(b => b.on != null && b.for && nameKey(b.for) === nameKey(p.name));
-      return { Player: p.name, Pos: p.pos, Line: posLine(p.pos), p: 1, id: p.id, jersey: p.jersey, rating: p.rating, goals: p.goals, assists: p.assists,
+    const words = s => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/\s+/).filter(Boolean);
+    const same = (a, b) => { if (nameKey(a) === nameKey(b)) return true;           // "Fredrik André Bjørkan" = "Fredrik Bjørkan", "Alfon" = "Alfonso"
+      const x = words(a), y = words(b); return !!(x.length && y.length && x[x.length - 1] === y[y.length - 1] && (x[0].startsWith(y[0]) || y[0].startsWith(x[0]))); };
+    const asXI = l => ({ ours: (l.xi || []).map(p => { const sub = (l.bench || []).find(b => b.on != null && b.for && same(b.for, p.name));
+      return { Player: p.name, Pos: p.pos, Line: posLine(p.pos), p: 1, id: p.id, jersey: p.jersey, rating: p.rating, unrated: rated && p.rating == null, goals: p.goals, assists: p.assists,
                yellow: p.yellow, red: p.red, off: p.off, sub: sub ? { name: sub.name, id: sub.id, jersey: sub.jersey, on: sub.on } : null }; }), confirmed: true, formation: l.formation });
     const kit = s => (colors || {})[s] || ((R.teams || []).find(t => t.side === s) || {}).color || null;   // v35: team colours on the pitch
     const ev = p => `${"⚽".repeat(Math.min(p.goals || 0, 4))}${p.yellow ? '<i class="cardi y"></i>' : ""}${p.red ? '<i class="cardi r"></i>' : ""}`;
@@ -482,8 +489,8 @@
       return `<div class="lblock" data-lblock="${s}" ${s === "away" ? "hidden" : ""}>
         ${co ? `<p class="coach"><span class="jn">C</span> ${esc(co)} <span class="muted small">Coach</span></p>` : ""}
         <h3>Starting XI${l.formation ? ` <span class="muted small">${esc(l.formation)}</span>` : ""}</h3><ul class="list sq">
-        ${(l.xi || []).map(p => `<li><span class="jn num">${esc(p.jersey)}</span><span class="who">${pl(p)} ${ev(p)}<br><span class="small muted">${esc(p.pos)}${p.off != null ? ` · <span class="offi">↘</span> ${esc(p.off)}` : ""}</span></span>${ratingChip(p.rating)}</li>`).join("")}</ul>
-        ${used.length ? `<h3>Substitutions</h3><ul class="list sq">${used.map(p => `<li><span class="jn num">${esc(p.jersey)}</span><span class="who">${pl(p)} ${ev(p)}<br><span class="small"><span class="oni">➜</span> <span class="num">${esc(p.on)}</span> <span class="muted">Out: ${esc(p.for || "")}</span></span></span>${ratingChip(p.rating)}</li>`).join("")}</ul>` : ""}
+        ${(l.xi || []).map(p => `<li><span class="jn num">${esc(p.jersey)}</span><span class="who">${pl(p)} ${ev(p)}<br><span class="small muted">${esc(p.pos)}${p.off != null ? ` · <span class="offi">↘</span> ${esc(p.off)}` : ""}</span></span>${ratingChip(p.rating, rated)}</li>`).join("")}</ul>
+        ${used.length ? `<h3>Substitutions</h3><ul class="list sq">${used.map(p => `<li><span class="jn num">${esc(p.jersey)}</span><span class="who">${pl(p)} ${ev(p)}<br><span class="small"><span class="oni">➜</span> <span class="num">${esc(p.on)}</span> <span class="muted">Out: ${esc(p.for || "")}</span></span></span>${ratingChip(p.rating, rated)}</li>`).join("")}</ul>` : ""}
         ${unused.length ? `<h3>${used.length ? "Unused substitutes" : "Substitutes"}</h3><ul class="list sq">${unused.map(p => `<li><span class="jn num">${esc(p.jersey)}</span><span class="who">${pl(p)}<br><span class="small muted">${esc(p.pos)}</span></span></li>`).join("")}</ul>` : ""}
       </div>`; };
     return `<h2>Lineups</h2><p class="small muted">Official team sheets${R.completed ? "; ratings after full-time" : ""}.</p>
@@ -776,7 +783,7 @@
     let P = null;                                                     // v35: what Kwallo said before kickoff (from that day's results file)
     if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { try { P = ((await get(`days/${date}.json`)).matches || []).find(x => x.espn === e) || null; } catch (err) {} }
     setNav("today");
-    const R = await getJSON(workerApi(`result?e=${encodeURIComponent(e)}`));
+    const R = await getJSON(workerApi(`result?e=${encodeURIComponent(e)}&v=${DATA_V}`));
     const T = R.teams || [], H = T.find(t => t.side === "home") || T[0] || {}, A = T.find(t => t.side === "away") || T[1] || {};
     const bar = s => { const h = parseFloat(s.home), a = parseFloat(s.away), tot = h + a;
       return isFinite(h) && isFinite(a) && tot > 0 ? `<div class="bar mini" aria-hidden="true"><i class="h" style="flex-basis:${100 * h / tot}%"></i><i class="a" style="flex-basis:${100 * a / tot}%"></i></div>` : ""; };
@@ -989,7 +996,8 @@
         const inner = p.jersey ? `<text x="${f1x(x)}" y="${y + 4}" text-anchor="middle" class="pj" style="fill:${ink}">${esc(p.jersey)}</text>`
           : (p.p != null && p.p < 0.995 ? `<text x="${f1x(x)}" y="${y + 4}" text-anchor="middle" class="pp" style="fill:${ink}">${Math.round(100 * p.p)}</text>` : "");
         const rt = p.rating != null ? `<rect x="${f1x(x - 12.5)}" y="${y + 8}" width="25" height="12" rx="3" fill="${ratingColor(p.rating)}"/>
-          <text x="${f1x(x)}" y="${y + 17.3}" text-anchor="middle" class="prt">${Number(p.rating).toFixed(1)}</text>` : "";
+          <text x="${f1x(x)}" y="${y + 17.3}" text-anchor="middle" class="prt">${Number(p.rating).toFixed(1)}</text>`
+          : p.unrated ? `<rect x="${f1x(x - 12.5)}" y="${y + 8}" width="25" height="12" rx="3" class="prn"/><text x="${f1x(x)}" y="${y + 17.3}" text-anchor="middle" class="prt">–</text>` : "";
         const off = p.off ? `<text x="${f1x(x)}" y="${y + 41}" text-anchor="middle" class="poff">↓ ${esc(p.off)}</text>` : "";
         let sub = "";
         if (p.sub) { const sx = x + sides[i] * 21, sy = y - 4;

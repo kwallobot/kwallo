@@ -296,6 +296,8 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .pitchfig .poff { font: 700 8.5px var(--font); fill: var(--bad); }
 .pitchfig .pon { font: 700 8px var(--font); fill: var(--good); }
 .pitchfig .psj { font: 800 7.5px var(--font); font-stretch: 80%; }
+/* v35: not rated by PitchAPI (on for the last few minutes): a grey chip */
+.rchip.r0 { background: #A9B5B0; } .pitchfig .prn { fill: #A9B5B0; }
 /* v35: smooth swipes between dates and tabs: the page leaves sideways moves to the site (up-and-down scrolling and zoom stay the browser's),
    and the content sliding off-screen doesn't widen the page */
 #app { touch-action: pan-y pinch-zoom; overflow-x: clip; }
