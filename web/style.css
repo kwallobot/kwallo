@@ -290,6 +290,12 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .scores .sc.hit b { color: var(--good); text-decoration: underline; text-underline-offset: 3px; }
 .pitchfig .pj { font: 800 11px var(--font); font-stretch: 80%; }
 .pitchfig .prt { font: 800 9.5px var(--font); fill: #111; }
+/* v35: goals, assists and cards at the top right of each player; the minute he went off; the substitute's small circle */
+.pitchfig .pball { fill: #fff; stroke: #111; stroke-width: .8; } .pitchfig .pdot { fill: #111; }
+.pitchfig .pa { font: 800 6.5px var(--font); fill: #111; }
+.pitchfig .poff { font: 700 8.5px var(--font); fill: var(--bad); }
+.pitchfig .pon { font: 700 8px var(--font); fill: var(--good); }
+.pitchfig .psj { font: 800 7.5px var(--font); font-stretch: 80%; }
 /* v35: smooth swipes between dates and tabs: the page leaves sideways moves to the site (up-and-down scrolling and zoom stay the browser's),
    and the content sliding off-screen doesn't widen the page */
 #app { touch-action: pan-y pinch-zoom; overflow-x: clip; }

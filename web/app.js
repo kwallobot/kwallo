@@ -470,7 +470,10 @@
         <div class="stat-grid two"><div><h3>${esc(H)}</h3>${list(S.home, hsl)}</div><div><h3>${esc(A)}</h3>${list(S.away, asl)}</div></div>`;
     }
     const side = s => L.find(l => l.side === s) || {};
-    const asXI = l => ({ ours: (l.xi || []).map(p => ({ Player: p.name, Pos: p.pos, Line: posLine(p.pos), p: 1, id: p.id, jersey: p.jersey, rating: p.rating })), confirmed: true, formation: l.formation });
+    // v35: on the pitch: shirt number, rating, goals, assists, cards, and who came on for him (and when)
+    const asXI = l => ({ ours: (l.xi || []).map(p => { const sub = (l.bench || []).find(b => b.on != null && b.for && nameKey(b.for) === nameKey(p.name));
+      return { Player: p.name, Pos: p.pos, Line: posLine(p.pos), p: 1, id: p.id, jersey: p.jersey, rating: p.rating, goals: p.goals, assists: p.assists,
+               yellow: p.yellow, red: p.red, off: p.off, sub: sub ? { name: sub.name, id: sub.id, jersey: sub.jersey, on: sub.on } : null }; }), confirmed: true, formation: l.formation });
     const kit = s => (colors || {})[s] || ((R.teams || []).find(t => t.side === s) || {}).color || null;   // v35: team colours on the pitch
     const ev = p => `${"⚽".repeat(Math.min(p.goals || 0, 4))}${p.yellow ? '<i class="cardi y"></i>' : ""}${p.red ? '<i class="cardi r"></i>' : ""}`;
     const block = (s, ts) => { const l = side(s), co = (coach || {})[s];
@@ -934,13 +937,13 @@
     if (b === "CF" && /-[LR]$/.test(c)) return 3.6;
     if (["F", "FW", "ST", "CF", "S", "SS", "LF", "RF"].includes(b)) return 4;
     return 2.5; };
-  // v34: the lineup on a pitch. Home in the bottom half, away in the top half; each line ordered left to right by position code
+  // v34: the lineup on a pitch (v35: home in the top half, away in the bottom half); each line ordered left to right by position code
   const sideRank = pos => { const c = String(pos || "").toUpperCase().trim();      // wide left 0, left of centre 1, centre 2, right of centre 3, wide right 4
     if (/-L$/.test(c)) return 1; if (/-R$/.test(c)) return 3; if (/^L/.test(c)) return 0; if (/^R/.test(c)) return 4; return 2; };
-  // v35: the away side plays downwards from the top, so its left flank is on the right of the screen (mirrored);
+  // v35: the home side plays downwards from the top, so its left flank is on the right of the screen (mirrored);
   //      every player links to his page
   function pitchSVG(home, away, H, A, cHome, cAway, hs, as) {
-    const W = 340, Hh = 520;
+    const W = 340, Hh = 632;
     // v35: drawn in the team's formation (e.g. 3-4-2-1 = back three, four, two attacking midfielders, one striker): outfield players are
     //      ordered from deepest to most advanced by their usual position and dealt into the formation's rows. Without a formation, by line,
     //      with ESPN's CF-L / CF-R beside a central striker counted as attacking midfielders.
@@ -961,29 +964,52 @@
       return { rows, label: f.length >= 2 && f.every(n => n > 0) && f.reduce((a, b) => a + b, 0) === out.length ? f.join("-") : rows.slice(1).map(r => r.length).join("-") };
     };
     const formation = g => g.label;
-    const dots = (g, top, color, ts) => {
-      const n = g.rows.length - 1, ys = [34, ...[...Array(n)].map((_, i) => n === 1 ? 160 : 90 + (i * (230 - 90)) / (n - 1))];
-      const ink = textOn(color);                                       // v35: shirt numbers readable on any kit colour
-      return g.rows.map((row, r) => row.map((p, i, arr) => { const x = (W / (arr.length + 1)) * (i + 1), y = Math.round(top ? ys[r] : Hh - ys[r]), op = p.p != null ? Math.max(0.35, Math.min(1, p.p)) : 1;
-        const sur = String(p.Player || "").split(" ").slice(-1)[0];
-        const inner = p.jersey ? `<text x="${x.toFixed(1)}" y="${y + 4}" text-anchor="middle" class="pj" style="fill:${ink}">${esc(p.jersey)}</text>`
-          : (p.p != null && p.p < 0.995 ? `<text x="${x.toFixed(1)}" y="${y + 4}" text-anchor="middle" class="pp" style="fill:${ink}">${Math.round(100 * p.p)}</text>` : "");
-        const rt = p.rating != null ? `<rect x="${(x + 6).toFixed(1)}" y="${y - 21}" width="25" height="13" rx="3" fill="${ratingColor(p.rating)}"/>
-          <text x="${(x + 18.5).toFixed(1)}" y="${y - 11.5}" text-anchor="middle" class="prt">${Number(p.rating).toFixed(1)}</text>` : "";
-        return `<a href="${playerHref(ts, p.Player, p.id)}" aria-label="${esc(p.Player)}"><g opacity="${op.toFixed(2)}"><circle cx="${x.toFixed(1)}" cy="${y}" r="13" fill="${color}" stroke="#fff" stroke-width="1.5"/>
-          <text x="${x.toFixed(1)}" y="${y + 27}" text-anchor="middle" class="pn">${esc(sur.slice(0, 12))}</text>${inner}${rt}</g></a>`; }).join("")).join("");
+    // v35: around each circle: the rating on its bottom edge, goals / assists / cards at the top right, the minute he went off under his
+    //      name, and the substitute who replaced him in a small circle beside him (on the side with more room)
+    const f1x = v => v.toFixed(1);
+    const events = (p, x, y) => {
+      const ic = [];
+      for (let k = 0; k < Math.min(p.goals || 0, 3); k++) ic.push(cx => `<circle cx="${f1x(cx)}" cy="${y - 17}" r="4" class="pball"/><circle cx="${f1x(cx)}" cy="${y - 17}" r="1.4" class="pdot"/>`);
+      for (let k = 0; k < Math.min(p.assists || 0, 3); k++) ic.push(cx => `<circle cx="${f1x(cx)}" cy="${y - 17}" r="4.6" class="pball"/><text x="${f1x(cx)}" y="${y - 14.4}" text-anchor="middle" class="pa">A</text>`);
+      if (p.yellow) ic.push(cx => `<rect x="${f1x(cx - 3)}" y="${y - 22}" width="6" height="9" rx="1" fill="#E9C43B"/>`);
+      if (p.red) ic.push(cx => `<rect x="${f1x(cx - 3)}" y="${y - 22}" width="6" height="9" rx="1" fill="#D8433A"/>`);
+      return ic.map((f, k) => f(x + 12 + k * 10)).join("");
     };
-    const gh = lines(home, false), ga = lines(away, true);
+    const subSides = row => {                                          // +1: the substitute sits to the right, -1: to the left
+      const sides = [];
+      row.forEach((p, i) => { const leftTaken = i > 0 && row[i - 1].sub && sides[i - 1] === 1, rightWants = i < row.length - 1 && row[i + 1].sub;
+        sides.push(leftTaken ? 1 : rightWants ? -1 : 1); });
+      return sides;
+    };
+    const dots = (g, top, color, ts) => {
+      const n = g.rows.length - 1, ys = [36, ...[...Array(n)].map((_, i) => n === 1 ? 170 : 92 + (i * (284 - 92)) / (n - 1))];
+      const ink = textOn(color);                                       // v35: shirt numbers readable on any kit colour
+      return g.rows.map((row, r) => { const sides = subSides(row); return row.map((p, i, arr) => { const x = (W / (arr.length + 1)) * (i + 1), y = Math.round(top ? ys[r] : Hh - ys[r]), op = p.p != null ? Math.max(0.35, Math.min(1, p.p)) : 1;
+        const sur = String(p.Player || "").split(" ").slice(-1)[0];
+        const inner = p.jersey ? `<text x="${f1x(x)}" y="${y + 4}" text-anchor="middle" class="pj" style="fill:${ink}">${esc(p.jersey)}</text>`
+          : (p.p != null && p.p < 0.995 ? `<text x="${f1x(x)}" y="${y + 4}" text-anchor="middle" class="pp" style="fill:${ink}">${Math.round(100 * p.p)}</text>` : "");
+        const rt = p.rating != null ? `<rect x="${f1x(x - 12.5)}" y="${y + 8}" width="25" height="12" rx="3" fill="${ratingColor(p.rating)}"/>
+          <text x="${f1x(x)}" y="${y + 17.3}" text-anchor="middle" class="prt">${Number(p.rating).toFixed(1)}</text>` : "";
+        const off = p.off ? `<text x="${f1x(x)}" y="${y + 41}" text-anchor="middle" class="poff">↓ ${esc(p.off)}</text>` : "";
+        let sub = "";
+        if (p.sub) { const sx = x + sides[i] * 21, sy = y - 4;
+          sub = `<a href="${playerHref(ts, p.sub.name, p.sub.id)}" aria-label="${esc(p.sub.name)}, on for ${esc(p.Player)}"><circle cx="${f1x(sx)}" cy="${sy}" r="7" fill="${color}" stroke="#fff" stroke-width="1"/>
+            <text x="${f1x(sx)}" y="${sy + 2.8}" text-anchor="middle" class="psj" style="fill:${ink}">${esc(p.sub.jersey || "")}</text>
+            ${arr.length <= 4 && p.sub.on ? `<text x="${f1x(sx + sides[i] * 4)}" y="${sy + 17}" text-anchor="middle" class="pon">↑${esc(p.sub.on)}</text>` : ""}</a>`; }
+        return `<a href="${playerHref(ts, p.Player, p.id)}" aria-label="${esc(p.Player)}"><g opacity="${op.toFixed(2)}"><circle cx="${f1x(x)}" cy="${y}" r="13" fill="${color}" stroke="#fff" stroke-width="1.5"/>
+          <text x="${f1x(x)}" y="${y + (rt ? 31 : 25)}" text-anchor="middle" class="pn">${esc(sur.slice(0, 12))}</text>${inner}${rt}${events(p, x, y)}${off}</g></a>${sub}`; }).join(""); }).join("");
+    };
+    const gh = lines(home, true), ga = lines(away, false);
     cHome = cHome || "#2E8F6A"; cAway = cAway || "#6F8F84";
     if (colorDist(cHome, cAway) < 90) cAway = lum(cHome) > 0.5 ? "#1B2A26" : "#EEF2EF";   // v35: two similar kits: the away side in a contrasting colour
-    return `<figure class="pitchfig"><figcaption class="small"><span><b>${esc(A)}</b> ${formation(ga) ? `(${formation(ga)})` : ""}</span></figcaption>
+    return `<figure class="pitchfig"><figcaption class="small"><span><b>${esc(H)}</b> ${formation(gh) ? `(${formation(gh)})` : ""}</span></figcaption>
       <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Lineups on the pitch: ${esc(H)} ${formation(gh)}, ${esc(A)} ${formation(ga)}">
         <rect x="1" y="1" width="${W - 2}" height="${Hh - 2}" rx="10" class="turf"/>
         <g class="lines" fill="none"><line x1="1" y1="${Hh / 2}" x2="${W - 1}" y2="${Hh / 2}"/><circle cx="${W / 2}" cy="${Hh / 2}" r="42"/>
           <rect x="${W / 2 - 80}" y="1" width="160" height="62"/><rect x="${W / 2 - 80}" y="${Hh - 63}" width="160" height="62"/>
           <rect x="${W / 2 - 34}" y="1" width="68" height="22"/><rect x="${W / 2 - 34}" y="${Hh - 23}" width="68" height="22"/></g>
-        ${dots(ga, true, cAway, as)}${dots(gh, false, cHome, hs)}
-      </svg><figcaption class="small"><span><b>${esc(H)}</b> ${formation(gh) ? `(${formation(gh)})` : ""}</span></figcaption></figure>`;
+        ${dots(gh, true, cHome, hs)}${dots(ga, false, cAway, as)}
+      </svg><figcaption class="small"><span><b>${esc(A)}</b> ${formation(ga) ? `(${formation(ga)})` : ""}</span></figcaption></figure>`;
   }
   function xiByPosition(e, ts) {
     const list = (e && e.ours) || [], groups = {};
