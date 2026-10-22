@@ -195,7 +195,7 @@ if PLAYER_MODEL and len(lu):
         print(f"Confirmed lineups: {sum(len(v) for v in CONFIRMED.values())} team-sides already announced.")
     feats = pd.concat([team_features(g, forced.get(tid, frozenset()), squads.get(str(tid)), apps, CONFIRMED.get(str(tid))).assign(team_id=tid)
                        for tid, g in allrows.groupby("team_id")], ignore_index=True)
-    mf = pair_features(feats, links[links["League"].isin(ESPN_LEAGUES.values())])
+    mf = pair_features(feats, links[links["League"].isin(ESPN_CORE if "ESPN_CORE" in globals() else ESPN_LEAGUES.values())])   # v36: learned on the original leagues
     up_feats = pair_features(feats, up_events[["event_id", "home_id", "away_id"]]) if len(up_events) else pd.DataFrame()
 
     # honest base predictions for learning the effects (cached; extended each run with newly finished weeks)

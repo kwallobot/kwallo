@@ -4,16 +4,17 @@ def get_fixtures():
     parts = []
     try:
         f = clean_cols(pd.read_csv(f"{DATA_URL}/fixtures.csv", encoding="latin-1"))
-        f = f[f["Div"].isin(LEAGUES.keys())].copy()
-        f["League"] = f["Div"].map(LEAGUES)
+        div_names_ = {**LEAGUES, **({c_: n_ for c_, n_ in LOWER_PREDICTED.items() if n_ in SOLO} if "LOWER_PREDICTED" in globals() else {})}   # v36: second tiers
+        f = f[f["Div"].isin(div_names_.keys())].copy()
+        f["League"] = f["Div"].map(div_names_)
         parts.append(f.reindex(columns=["League", "Date", "HomeTeam", "AwayTeam"] + ODDS).assign(src=3))
     except Exception as e:
         print("Could not load fixtures.csv:", e)
     try:
         nf = clean_cols(pd.read_csv(f"{DATA_URL}/new_league_fixtures.csv", encoding="latin-1"))
-        nf = nf[nf["Country"].astype(str).str.strip() == "USA"].rename(
-            columns={"Home": "HomeTeam", "Away": "AwayTeam", "AvgH": "B365H", "AvgD": "B365D", "AvgA": "B365A"})
-        nf["League"] = "MLS"
+        country_ = {"USA": "MLS", **{c_: n_ for c_, n_ in (FD_COUNTRY_LEAGUE.items() if "FD_COUNTRY_LEAGUE" in globals() else []) if n_ in SOLO}}   # v36
+        nf["League"] = nf["Country"].astype(str).str.strip().map(country_)
+        nf = nf[nf["League"].notna()].rename(columns={"Home": "HomeTeam", "Away": "AwayTeam", "AvgH": "B365H", "AvgD": "B365D", "AvgA": "B365A"})
         parts.append(nf.reindex(columns=["League", "Date", "HomeTeam", "AwayTeam"] + ODDS).assign(src=3))
     except Exception:
         pass
@@ -126,17 +127,32 @@ def predict_league(lg_data, games, half_life, totals=True, quiet=False, adjust=n
     fh, fa = fh * ch * ih * xh, fa * ca * ia * xa
     new_any = new_h | new_a
     top2 = {top: name for top, name in DIV2.values()} if "DIV2" in globals() else {}
+    from_top = np.zeros(len(games), dtype=bool)
     if SECOND_DIV.get("on") and league_ in top2 and new_any.any() and len(div2):
         # promoted teams: rating carried over from the second division instead of a "typical promoted side"
         d2_ = div2[(div2["League"] == top2[league_]) & (div2["Date"] < pd.to_datetime(games["Date"]).min())]
         h2, a2 = two_div_means(fit_two_div(lg_data, d2_, half_life), games)
         h, a = np.where(new_any, h2, h * promo_h), np.where(new_any, a2, a * promo_a)
         h, a = h * fh, a * fa
+    elif league_ in (LOWER_TOP if "LOWER_TOP" in globals() else {}) and new_any.any():
+        # v36: in a second tier, a club just relegated from the division above keeps its rating from there (both divisions on one
+        #      scale, this one at its own level); a club promoted from below is still rated as a typical promoted side
+        top_ = league_frame(LOWER_TOP[league_])
+        top_ = top_[top_["Date"] < pd.to_datetime(games["Date"]).min()]
+        known_top = set(top_["HomeTeam"]) | set(top_["AwayTeam"])
+        from_top = new_any & np.where(new_h, games["HomeTeam"].isin(known_top), True) & np.where(new_a, games["AwayTeam"].isin(known_top), True)
+        if from_top.any():
+            h2, a2 = two_div_means(fit_two_div(top_, lg_data, half_life), games, level=1.0)
+            h, a = np.where(from_top, h2, h * promo_h), np.where(from_top, a2, a * promo_a)
+            h, a = h * fh, a * fa
+        else:
+            h, a = h * promo_h * fh, a * promo_a * fa
     else:
         h, a = h * promo_h * fh, a * promo_a * fa
     p = outcome_probs(h, a, rho)
     note = np.where(new_h | new_a, ("New to the league: rated from its second-division results" if (SECOND_DIV.get("on") and league_ in top2)
                                      else "New to the league: rated as a typical promoted side"), "")
+    note = np.where(from_top, "New to the league: rated from its results in the division above", note)
     t = pd.DataFrame({"Competition": games["League"].values, "Date": pd.to_datetime(games["Date"]).dt.strftime("%Y-%m-%d").values,
                       "Home": games["HomeTeam"].values, "Away": games["AwayTeam"].values,
                       "pH": p[:, 0], "pD": p[:, 1], "pA": p[:, 2], "ExpHome": h, "ExpAway": a, "rho": rho,
@@ -151,21 +167,24 @@ def predict_league(lg_data, games, half_life, totals=True, quiet=False, adjust=n
         h2, a2 = shrunk_means(gm2, g2)
         mu = h2 * promo_h * fh + a2 * promo_a * fa
         t["ExpGoals"], t["pOver25"] = mu, over_prob(mu, k2, 2.5)
-        cm_, kc = fit_total(lg_data, "HY", "AY", 0.1)
-        ch_, ca_ = shrunk_means(cm_, g2)
-        if "cards_multipliers" in globals():
-            cmul_ = cards_multipliers(games)                    # appointed referee and derbies, if that test passed
-            ch_, ca_ = ch_ * cmul_, ca_ * cmul_
-        mu = ch_ + ca_
-        t["ExpCards"], t["pOverCards"] = mu, over_prob(mu, kc, 4.5)
-        t["ExpCardsH"], t["ExpCardsA"] = ch_, ca_               # v23: each side's expected yellow cards
+        lyc = lg_data.dropna(subset=["HY", "AY"])                # v36: only matches with card counts (all of them in the main leagues)
+        if len(lyc) >= 200:
+            cm_, kc = fit_total(lyc, "HY", "AY", 0.1)
+            ch_, ca_ = shrunk_means(cm_, g2)
+            if "cards_multipliers" in globals():
+                cmul_ = cards_multipliers(games)                    # appointed referee and derbies, if that test passed
+                ch_, ca_ = ch_ * cmul_, ca_ * cmul_
+            mu = ch_ + ca_
+            t["ExpCards"], t["pOverCards"] = mu, over_prob(mu, kc, 4.5)
+            t["ExpCardsH"], t["ExpCardsA"] = ch_, ca_               # v23: each side's expected yellow cards
         lc = lg_data.dropna(subset=["HC", "AC", "HS", "AS"])
-        mc, ms = fit_weighted(lc, "HC", "AC", 1.0), fit_weighted(lc, "HS", "AS", 1.0)
-        ratio = (lc["HC"] + lc["AC"]).sum() / (lc["HS"] + lc["AS"]).sum()
-        blend = lambda d: (sum(shrunk_means(mc, d)) + sum(shrunk_means(ms, d)) * ratio) / 2
-        y = (lc["HC"] + lc["AC"]).values
-        kcorn = np.mean((y - blend(lc)) ** 2) / np.mean(blend(lc))
-        t["ExpCorners"], t["pOverCorners"] = blend(g2), over_prob(blend(g2), kcorn, 9.5)
+        if len(lc) >= 200:                                          # v36: a league without corner and shot counts skips corners
+            mc, ms = fit_weighted(lc, "HC", "AC", 1.0), fit_weighted(lc, "HS", "AS", 1.0)
+            ratio = (lc["HC"] + lc["AC"]).sum() / (lc["HS"] + lc["AS"]).sum()
+            blend = lambda d: (sum(shrunk_means(mc, d)) + sum(shrunk_means(ms, d)) * ratio) / 2
+            y = (lc["HC"] + lc["AC"]).values
+            kcorn = np.mean((y - blend(lc)) ** 2) / np.mean(blend(lc))
+            t["ExpCorners"], t["pOverCorners"] = blend(g2), over_prob(blend(g2), kcorn, 9.5)
     return t
 
 fixtures = get_fixtures()
@@ -181,7 +200,7 @@ for league in list(LEAGUES.values()) + list(SOLO):
     if games.empty:
         continue
     if league in SOLO:
-        t = predict_league(SOLO[league]["data"], games, half_life=SOLO[league]["half_life"], totals=False, adjust=live_adjust)
+        t = predict_league(SOLO[league]["data"], games, half_life=SOLO[league]["half_life"], totals=SOLO[league].get("totals", False), adjust=live_adjust)
     else:
         t = predict_league(all_matches[all_matches["League"] == league], games, half_life=365, adjust=live_adjust)
     if t is not None:
@@ -201,6 +220,20 @@ if CALIBRATION:
     print("Calibration in use (learned on earlier matches, tested on later ones):",
           ", ".join(f"{g}: {v.get('T', 1):.2f} / draws x{v.get('draw', 1):.2f}" for g, v in CALIBRATION.items()))
 pred_dom = pd.concat(dom_preds, ignore_index=True) if dom_preds else pd.DataFrame()
+
+# v36: the league gate. A new league's predictions are published (site, channel, bot, track record) only once its replay of this
+#      season has passed (section 8 decides, so a decision made in one run applies from the next); until then they're held back.
+GATE_PATH = f"{SAVE_DIR}/league_gate.json"
+LEAGUE_GATE = json.load(open(GATE_PATH)) if os.path.exists(GATE_PATH) else {}
+GATE_HIDDEN = {lg_ for lg_ in (NEW_LEAGUES_V36 if "NEW_LEAGUES_V36" in globals() else set()) if not LEAGUE_GATE.get(lg_, {}).get("pass")}
+if len(pred_dom) and GATE_HIDDEN:
+    held_ = pred_dom[pred_dom["Competition"].isin(GATE_HIDDEN)]
+    pred_dom = pred_dom[~pred_dom["Competition"].isin(GATE_HIDDEN)].reset_index(drop=True)
+    if len(held_):
+        print(f"League gate: {len(held_)} fixtures held back in {held_['Competition'].nunique()} new leagues until their backtest passes "
+              f"({', '.join(sorted(held_['Competition'].unique()))}).")
+passed_ = sorted(lg_ for lg_ in (NEW_LEAGUES_V36 if "NEW_LEAGUES_V36" in globals() else set()) if LEAGUE_GATE.get(lg_, {}).get("pass"))
+health("League gate (v36 leagues)", True, f"{len(passed_)} published" + (f": {', '.join(passed_)}" if passed_ else "") + f"; {len(GATE_HIDDEN)} waiting")
 
 if len(pred_dom):
     show = pred_dom[["Competition", "Date", "Home", "Away"]].copy()

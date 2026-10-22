@@ -3,8 +3,9 @@ Everything here is public: model probabilities, fair odds, results and statistic
 import os, json, re
 import numpy as np, pandas as pd
 
-GROUP_ORDER = ["europe_top", "europe_other", "americas", "africa_me"]
-GROUP_NAMES = {"europe_top": "Europe: big leagues and cups", "europe_other": "Europe: other leagues", "americas": "The Americas", "africa_me": "Africa and the Middle East"}
+GROUP_ORDER = ["europe_top", "europe_other", "europe_lower", "americas", "africa_me", "asia"]
+GROUP_NAMES = {"europe_top": "Europe: big leagues and cups", "europe_other": "Europe: other leagues", "americas": "The Americas", "africa_me": "Africa and the Middle East",
+               "europe_lower": "Europe: second tiers and smaller leagues", "asia": "Asia"}      # v36: the last two
 CUPS = {"Champions League", "Europa League", "Conference League"}
 
 
@@ -131,7 +132,9 @@ def _past_days(ns, data_dir, write, slug, clean, comp_names):
             rows.append({"competition": x.Comp, "league_slug": slug(x.Comp), "home": x.HomeTeam, "away": x.AwayTeam,
                          "home_slug": slug(x.HomeTeam), "away_slug": slug(x.AwayTeam), "hs": int(x.FTHG), "as": int(x.FTAG),
                          "espn": x.espn if isinstance(getattr(x, "espn", None), str) and ":" in x.espn else None,
-                         "pred": {"pH": p[0], "pD": p[1], "pA": p[2], "scores": _likeliest(*p)} if p and pd.notna(p[0]) else None, "top": top.get(k)})
+                         "pred": {"pH": p[0], "pD": p[1], "pA": p[2], "scores": _likeliest(*p),
+                                  "eh": p[3] if pd.notna(p[3]) else None, "ea": p[4] if pd.notna(p[4]) else None}   # v36: for the win-probability graph
+                                 if p and pd.notna(p[0]) else None, "top": top.get(k)})
         n += write(f"site/days/{d}.json", clean({"date": d, "matches": rows}))
         dates.append(d)
     n += write("site/days/index.json", {"from": PAST_FROM, "dates": dates})
@@ -385,7 +388,8 @@ def build(ns, data_dir, mode, write, slug, clean):
     res, season_of = _results(ns)
     n_files = 0
     # ---------- competitions: tables and matchdays ----------
-    comps, comp_names = [], set(m["Competition"] for m in matches) | set(season_of)
+    hidden_ = set(ns.get("GATE_HIDDEN") or [])                    # v36: new leagues still waiting for their backtest to pass
+    comps, comp_names = [], (set(m["Competition"] for m in matches) | set(season_of)) - hidden_
     for comp in sorted(comp_names):
         cs = slug(comp)
         cur = res[(res["League"] == comp) & (res["Season"] == season_of.get(comp, ""))] if len(res) else pd.DataFrame()

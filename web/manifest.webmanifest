@@ -1,0 +1,22 @@
+{
+  "name": "Kwallo: football, decoded.",
+  "short_name": "Kwallo",
+  "description": "Match predictions with honest probabilities and fair odds, live scores, lineups and a public track record.",
+  "id": "/",
+  "start_url": "/?source=app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0B201B",
+  "theme_color": "#0B201B",
+  "categories": ["sports", "news"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Today's matches", "short_name": "Today", "url": "/?source=app#/", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Best angles", "short_name": "Angles", "url": "/?source=app#/angles", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Track record", "short_name": "Record", "url": "/?source=app#/track", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

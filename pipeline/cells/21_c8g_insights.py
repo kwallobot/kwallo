@@ -55,10 +55,16 @@ PLAYER_CAL = {}
 # v32: calibration by league group, so thinner data in one region can't blur another's corrections
 CAL_GROUPS = {"europe_top": {"Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions League", "Europa League", "Conference League"},
               "americas": {"MLS", "Liga MX", "Argentina Liga Profesional", "Brasileirão Série A", "Brasileirão Série B", "Bolivia División Profesional"},
-              "africa_me": {"Saudi Pro League", "South African Premiership", "NPFL (Nigeria)", "Egyptian Premier League"}}
-CAL_GROUP_NAMES = {"europe_top": "Europe's big leagues and cups", "europe_other": "other European leagues", "americas": "the Americas", "africa_me": "Africa and the Middle East"}
+              "africa_me": {"Saudi Pro League", "South African Premiership", "NPFL (Nigeria)", "Egyptian Premier League"},
+              # v36: second tiers and the smaller European leagues, and Asia
+              "europe_lower": {"Championship", "League One", "League Two", "Segunda Division", "2. Bundesliga", "Serie B", "Ligue 2", "Scottish Championship",
+                               "Romanian Liga I", "Ekstraklasa", "Czech First League", "Croatian HNL", "Serbian SuperLiga", "Israeli Premier League", "Slovak First League"},
+              "asia": {"J1 League", "Chinese Super League"}}
+CAL_GROUP_NAMES = {"europe_top": "Europe's big leagues and cups", "europe_other": "other European leagues", "americas": "the Americas", "africa_me": "Africa and the Middle East",
+                   "europe_lower": "Europe's second tiers and smaller leagues", "asia": "Asia"}
 _PA_CC = {"ENG": "europe_top", "ESP": "europe_top", "GER": "europe_top", "ITA": "europe_top", "FRA": "europe_top",
-          "USA": "americas", "MEX": "americas", "ARG": "americas", "BRA": "americas", "BOL": "americas", "KSA": "africa_me", "RSA": "africa_me", "EGY": "africa_me"}
+          "USA": "americas", "MEX": "americas", "ARG": "americas", "BRA": "americas", "BOL": "americas", "KSA": "africa_me", "RSA": "africa_me", "EGY": "africa_me",
+          "JPN": "asia", "CHN": "asia"}
 def cal_group(comp):
     c_ = str(comp)
     if ":" in c_ and c_.split(":")[0].isupper():                  # PitchAPI's "ENG:Premier League" style

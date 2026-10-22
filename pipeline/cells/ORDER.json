@@ -28,6 +28,7 @@
  "26_c8j_markets.py",
  "27_c8i_verdict.py",
  "28_c10_experiments.py",
+ "28b_c10b_playerelo.py",
  "29_c8f_lower.py",
  "30_c8h_ml.py",
  "31_c9_dashboard.py"

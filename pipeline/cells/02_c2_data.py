@@ -166,6 +166,62 @@ health("football-data.co.uk (11 leagues)", _lag <= 10, f"{len(all_matches)} matc
 health("football-data.co.uk (MLS and 7 extra leagues)", len(mls) and len(extra_matches),
        f"MLS latest {mls['Date'].max():%d %b}; {extra_matches['League'].nunique()} extra leagues")
 
+# ---------- v36: 22 more predicted leagues, each predicted on its own (like MLS) ----------
+# Second tiers come from football-data.co.uk's main files (results, odds, corners and cards); a club just relegated from the
+# division above is rated from its results there (section 4). The smaller European leagues, J1 and the Chinese Super League come
+# from football-data's "new" files (results and closing odds); Czechia, Croatia, Serbia, Israel and Slovakia from PitchAPI
+# (section 1d; results only, no odds). A new league is published only once its replay of this season passes (section 8).
+LOWER_PREDICTED = {"E1": "Championship", "E2": "League One", "E3": "League Two", "SP2": "Segunda Division", "D2": "2. Bundesliga",
+                   "I2": "Serie B", "F2": "Ligue 2", "SC1": "Scottish Championship"}
+LOWER_TOP = {"Championship": "Premier League", "League One": "Championship", "League Two": "League One", "Segunda Division": "La Liga",
+             "2. Bundesliga": "Bundesliga", "Serie B": "Serie A", "Ligue 2": "Ligue 1", "Scottish Championship": "Scottish Premiership"}
+NEW_FORMAT_PREDICTED = {"AUT": "Austrian Bundesliga", "SWZ": "Swiss Super League", "DNK": "Danish Superliga", "NOR": "Eliteserien",
+                        "SWE": "Allsvenskan", "ROU": "Romanian Liga I", "POL": "Ekstraklasa", "JPN": "J1 League", "CHN": "Chinese Super League"}
+PA_PREDICTED = {"CZE": "Czech First League", "CRO": "Croatian HNL", "SRB": "Serbian SuperLiga", "ISR": "Israeli Premier League",
+                "SVK": "Slovak First League"}                      # PitchAPI's results (section 1d): no bookmaker odds
+NEW_LEAGUES_V36 = set(LOWER_PREDICTED.values()) | set(NEW_FORMAT_PREDICTED.values()) | set(PA_PREDICTED.values())
+CHANCES_ONLY = set(PA_PREDICTED.values())            # no odds to test against: result chances only on the site, no angles or markets
+V36_GROUP = {**{n_: "Europe 2" for n_ in LOWER_PREDICTED.values()}, **{n_: "Europe small" for n_ in list(NEW_FORMAT_PREDICTED.values())[:7]},
+             "J1 League": "Asia", "Chinese Super League": "Asia", **{n_: "Europe small" for n_ in PA_PREDICTED.values()}}
+FD_COUNTRY_LEAGUE = {"Austria": "Austrian Bundesliga", "Switzerland": "Swiss Super League", "Denmark": "Danish Superliga", "Norway": "Eliteserien",
+                     "Sweden": "Allsvenskan", "Romania": "Romanian Liga I", "Poland": "Ekstraklasa", "Japan": "J1 League", "China": "Chinese Super League"}
+
+def _load_lower(code, name):
+    frames_ = []
+    for season_ in SEASONS:
+        try:
+            df_ = pd.read_csv(f"{DATA_URL}/mmz4281/{season_}/{code}.csv", encoding="latin-1", on_bad_lines="skip")
+        except Exception:
+            continue
+        df_ = clean_cols(df_).reindex(columns=KEEP)
+        df_["League"], df_["Season"] = name, season_
+        frames_.append(df_)
+    if not frames_:
+        return pd.DataFrame()
+    d_ = pd.concat(frames_, ignore_index=True).dropna(subset=["HomeTeam", "AwayTeam", "FTHG", "FTAG"])
+    d_["Date"] = pd.to_datetime(d_["Date"], dayfirst=True, format="mixed")
+    for c_ in ODDS + PRICE_COLS + OU_AH_COLS + ["FTHG", "FTAG", "HTHG", "HTAG", "HF", "AF", "HC", "AC", "HY", "AY", "HS", "AS", "HST", "AST", "HR", "AR"]:
+        d_[c_] = pd.to_numeric(d_[c_], errors="coerce")
+    return d_.sort_values("Date").reset_index(drop=True)
+
+_v36_loaded = []
+for code_, name_ in LOWER_PREDICTED.items():
+    d_ = _load_lower(code_, name_)
+    if len(d_) >= 200:
+        SOLO[name_] = {"data": d_, "season": SEASONS[-1], "half_life": 365, "group": V36_GROUP[name_], "totals": True}
+        _v36_loaded.append(name_)
+    else:
+        health(f"football-data.co.uk: {name_}", False, "not loaded this run")
+_newfmt_ = pd.concat([extra_matches] + [_load_new_safe(c_, n_) for c_, n_ in [("JPN", "J1 League"), ("CHN", "Chinese Super League")]], ignore_index=True)
+for code_, name_ in NEW_FORMAT_PREDICTED.items():
+    d_ = _newfmt_[(_newfmt_["League"] == name_) & (_newfmt_["Date"] >= start)].sort_values("Date").reset_index(drop=True)
+    if len(d_) >= 200:
+        for c_ in ["HC", "AC", "HY", "AY", "HS", "AS"]:
+            d_[c_] = np.nan
+        SOLO[name_] = {"data": d_, "season": str(d_["Season"].iloc[-1]), "half_life": 180, "group": V36_GROUP[name_]}
+        _v36_loaded.append(name_)
+print(f"v36 leagues loaded from football-data.co.uk: {len(_v36_loaded)} ({', '.join(_v36_loaded)}); the five PitchAPI leagues load in section 1d.")
+
 euro, euro_up = pd.DataFrame(), pd.DataFrame()
 name_map = {}
 if EURO_SOURCE == "fbref":

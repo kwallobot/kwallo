@@ -9,6 +9,13 @@
 <script>/* v35: links like /match/<slug> (without "#") open the right page: rewrite to /#/match/<slug> before anything loads */
   (function () { var p = location.pathname.replace(/\/+$/, ""); if (p && p !== "/index.html" && /^\/(match|day|team|player|comp|result|leagues|angles|track|acca|more|fav)(\/|$)/.test(p)) { location.replace("/#" + p + location.search); } })();</script>
 <link rel="icon" href="/logo.svg" type="image/svg+xml">
+<!-- v36: the installable app (Android: "Install app"; iPhone: Share, then "Add to Home Screen") -->
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Kwallo">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
@@ -27,6 +34,7 @@
     <a class="tg-bot" href="#" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v4l-2 3h16l-2-3V9a6 6 0 0 0-6-6Zm-2.5 15a2.5 2.5 0 0 0 5 0Z" fill="currentColor"/></svg>Alerts</a>
   </div>
 </header>
+<p class="offline" id="offline" hidden>You're offline: showing the last matches loaded on this device.</p>
 <main id="app" tabindex="-1"><p class="loading">Loading today's matches…</p></main>
 <footer class="foot">
   <p>Kwallo shows model probabilities, not guarantees. Odds are fair odds, the break-even price. 18+ only. If betting stops being fun, take a break.</p>

@@ -16,12 +16,21 @@ if INCLUDE_NEW_LEAGUES:                                   # v29
 # leagues whose whole history comes from ESPN (name, calendar-year seasons?, scorecard group)
 ESPN_SOLO = {"bra.2": ("Brasileirão Série B", True, "Americas"), "bol.1": ("Bolivia División Profesional", True, "Americas"),
              "rsa.1": ("South African Premiership", False, "Africa"), "nga.1": ("NPFL (Nigeria)", False, "Africa")} if INCLUDE_NEW_LEAGUES else {}
-ESPN_OTHER = ["aut.1", "den.1", "nor.1", "swe.1", "uefa.champions", "uefa.europa"]   # lineups only (rotation)
-ESPN_EXTRA_LEAGUES = {"aut.1": "Austrian Bundesliga", "den.1": "Danish Superliga", "nor.1": "Eliteserien", "swe.1": "Allsvenskan"}
+ESPN_CORE = set(ESPN_LEAGUES.values())                  # v36: the player model keeps learning from these leagues only
+# v36: the new predicted leagues ESPN covers: lineups, fixtures (with ESPN's ids, so the site follows them live) and team statistics.
+#      (Switzerland, Romania, Poland and the five PitchAPI leagues aren't on ESPN: their fixtures come from football-data.co.uk and PitchAPI.)
+ESPN_LEAGUES.update({"eng.2": "Championship", "eng.3": "League One", "eng.4": "League Two", "esp.2": "Segunda Division", "ger.2": "2. Bundesliga",
+                     "ita.2": "Serie B", "fra.2": "Ligue 2", "sco.2": "Scottish Championship", "aut.1": "Austrian Bundesliga",
+                     "den.1": "Danish Superliga", "nor.1": "Eliteserien", "swe.1": "Allsvenskan", "jpn.1": "J1 League", "chn.1": "Chinese Super League"})
+ESPN_OTHER = ["uefa.champions", "uefa.europa"]          # lineups only (rotation); v36: Austria and the Nordic leagues moved up to ESPN_LEAGUES
+ESPN_EXTRA_LEAGUES = {}
 EURO_CODES = {"uefa.champions": "Champions League", "uefa.europa": "Europa League"}
 _conf_path = f"{SAVE_DIR}/espn_conference_code.json"
 CONF_CODE = json.load(open(_conf_path)).get("code") if os.path.exists(_conf_path) else None
-LINEUP_START = {"usa.1": "2025-02-01", "nor.1": "2025-03-01", "swe.1": "2025-03-01"}
+# lineup history starts here per league (otherwise LINEUP_HISTORY_FROM); v36: the new leagues from this season only, so the backlog stays small
+LINEUP_START = {"usa.1": "2025-02-01", "nor.1": "2025-03-01", "swe.1": "2025-03-01",
+                **{c_: "2026-07-01" for c_ in ["eng.2", "eng.3", "eng.4", "esp.2", "ger.2", "ita.2", "fra.2", "sco.2"]},
+                "jpn.1": "2026-02-01", "chn.1": "2026-03-01"}
 STAT_NAMES = {"totalGoals": "goals", "goalAssists": "assists", "totalShots": "shots", "shotsOnTarget": "sot",
               "yellowCards": "yellow", "redCards": "red", "saves": "saves", "goalsConceded": "conceded", "foulsCommitted": "fouls"}
 
@@ -94,7 +103,7 @@ def update_lineups(minutes):
     t0, total_new, total_events = time.time(), 0, 0
     this_month = TODAY.strftime("%Y%m")
     hist = pd.Timestamp(LINEUP_HISTORY_FROM)
-    calendar_year = {"usa.1", "nor.1", "swe.1"}
+    calendar_year = {"usa.1", "nor.1", "swe.1", "chn.1"}
     out_of_time = False
     for code in list(ESPN_LEAGUES) + ESPN_OTHER:
         path, epath, state_path = f"{LINEUP_DIR}/{code}.csv", f"{LINEUP_DIR}/{code}_events.csv", f"{LINEUP_DIR}/{code}_state.json"
@@ -102,6 +111,8 @@ def update_lineups(minutes):
         done, ev_done = set(state.get("done", [])), set(state.get("events_done", []))
         months_full = set(state.get("months_full", []))           # months with both lineups and events stored
         first = pd.Timestamp(f"{hist.year}-02-01") if code in calendar_year else hist
+        if code in LINEUP_START:                                  # v36: LINEUP_START now applies (it was listed but never used)
+            first = max(first, pd.Timestamp(LINEUP_START[code]))
         months = [d.strftime("%Y%m") for d in pd.date_range(first.replace(day=1), TODAY, freq="MS")][::-1]   # newest first
         lbuf, ebuf, tbuf = [], [], []
         for m in months:

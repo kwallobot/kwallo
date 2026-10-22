@@ -13,7 +13,13 @@
     "Eredivisie": "Netherlands", "Primeira Liga": "Portugal", "Belgian Pro League": "Belgium", "Scottish Premiership": "Scotland", "Super Lig": "Turkey",
     "Greek Super League": "Greece", "MLS": "USA", "Saudi Pro League": "Saudi Arabia", "Liga MX": "Mexico", "Argentina Liga Profesional": "Argentina",
     "Brasileirão Série A": "Brazil", "Brasileirão Série B": "Brazil", "Bolivia División Profesional": "Bolivia", "South African Premiership": "South Africa",
-    "NPFL (Nigeria)": "Nigeria", "Egyptian Premier League": "Egypt", "Champions League": "Europe", "Europa League": "Europe", "Conference League": "Europe" };
+    "NPFL (Nigeria)": "Nigeria", "Egyptian Premier League": "Egypt", "Champions League": "Europe", "Europa League": "Europe", "Conference League": "Europe",
+    // v36
+    "League One": "England", "League Two": "England", "Segunda Division": "Spain", "2. Bundesliga": "Germany", "Serie B": "Italy", "Ligue 2": "France",
+    "Scottish Championship": "Scotland", "Austrian Bundesliga": "Austria", "Swiss Super League": "Switzerland", "Danish Superliga": "Denmark",
+    "Eliteserien": "Norway", "Allsvenskan": "Sweden", "Romanian Liga I": "Romania", "Ekstraklasa": "Poland", "Czech First League": "Czechia",
+    "Croatian HNL": "Croatia", "Serbian SuperLiga": "Serbia", "Israeli Premier League": "Israel", "Slovak First League": "Slovakia",
+    "J1 League": "Japan", "Chinese Super League": "China" };
   let LIVE = {}, liveAt = 0;
   async function getLive(force) {                                   // live and finished scores, refreshed at most once a minute
     if (!force && Date.now() - liveAt < 50000) return LIVE;
@@ -448,10 +454,77 @@
       <p class="skeys small"><span class="dot h"></span>${esc(H)}<span class="dot a"></span>${esc(A)}</p>
       <p class="small muted mnote">${mo.source === "xg" ? "From the quality (xG) of every shot." : mo.source === "xg_est" ? "From Kwallo's estimate of every shot's quality (xG)." : "From shots, chances and corners, minute by minute."}</p></section>`;
   }
+  // ---------- v36: Kwallo's in-play chances. The pre-match expected goals for the time still to play (goals come a little more often
+  //            late on), adjusted for red cards and for how each side's chances (xG) so far compare with what was expected, added to the
+  //            current score. Worked out here in the browser, minute by minute; nothing extra for the Worker or the pipeline.
+  const W_ = m => m + 0.35 * m * m / 180, W90 = W_(90);            // the goal rate rises by about a third from kick-off to the 90th minute
+  const pmf = (k, l) => { let p = Math.exp(-l); for (let i = 1; i <= k; i++) p *= l / i; return p; };
+  const clockMin = c => { const s = String(c || "").replace(/'/g, ""); if (/HT|half/i.test(s)) return 45;
+    const p = s.split("+").map(x => parseInt(x)); return p[0] === 45 && p[1] ? 45 : (p[0] || 0) + (p[1] || 0); };   // first-half stoppage stays at 45
+  function inPlay(eh, ea, s) {                                       // s: { min, hs, as, redH, redA, xgH, xgA, end } -> [home, draw, away]
+    const m = Math.max(0, s.min), elapsed = Math.min(W_(Math.min(m, 90)) / W90, 1);
+    const rem = m >= 90 ? Math.max(0, (s.end || 95) - m) * (1.35 / W90) : 1 - elapsed;
+    const form = (lam, x) => x == null ? 1 : Math.min(1.6, Math.max(0.6, (1.2 + x) / (1.2 + lam * elapsed)));   // xG so far vs expected, damped
+    const lh = eh * rem * form(eh, s.xgH) * Math.pow(0.72, s.redH) * Math.pow(1.25, s.redA);
+    const la = ea * rem * form(ea, s.xgA) * Math.pow(0.72, s.redA) * Math.pow(1.25, s.redH);
+    let pH = 0, pD = 0, pA = 0;
+    for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) {
+      const q = pmf(i, lh) * pmf(j, la), d = (s.hs + i) - (s.as + j);
+      if (d > 0) pH += q; else if (d === 0) pD += q; else pA += q;
+    }
+    const t = pH + pD + pA || 1;
+    return [pH / t, pD / t, pA / t];
+  }
+  // the match minute by minute: score, red cards and xG so far (from the timeline and the Worker's xG by minute)
+  function matchStates(R) {
+    const tl = (R.timeline || []).slice().reverse();                 // the timeline comes newest first
+    const goals = tl.filter(e => /goal|own|pen/.test(e.kind) && e.score).map(e => ({ m: clockMin(e.clock), sc: String(e.score).split("-").map(Number) }));
+    const reds = tl.filter(e => e.kind === "red").map(e => ({ m: clockMin(e.clock), side: e.side }));
+    const cum = (R.xg || {}).cum || null;
+    const at = m => { let hs = 0, as = 0; goals.forEach(g => { if (g.m <= m) [hs, as] = g.sc; });
+      return { min: m, hs, as, redH: reds.filter(r => r.m <= m && r.side === "home").length, redA: reds.filter(r => r.m <= m && r.side === "away").length,
+               xgH: cum ? cum.home[Math.min(m, 90)] : null, xgA: cum ? cum.away[Math.min(m, 90)] : null };
+    };
+    return { at, goals, reds };
+  }
+  const nowMin = R => R.state === "post" ? null : clockMin(R.status);
+  function liveChanceCard(R, eh, ea, H, A) {
+    if (!R || R.state !== "in" || !(eh > 0) || !(ea > 0)) return "";
+    const T = R.teams || [], hs = +((T.find(t => t.side === "home") || {}).score || 0), as = +((T.find(t => t.side === "away") || {}).score || 0);
+    const st = matchStates(R), m = nowMin(R), s = { ...st.at(m), hs, as };
+    if (R.xg && R.xg.home != null) { s.xgH = R.xg.home; s.xgA = R.xg.away; }
+    const p = inPlay(eh, ea, s);
+    return `<section class="scard livechance"><h3>Kwallo's live chances <span class="live">${esc(R.status || "")}</span></h3>
+      ${chanceBar({ pH: p[0], pD: p[1], pA: p[2] }, [H, A])}
+      <div class="bar-legend num"><span><b>${pct(p[0])}</b>${esc(H)}</span><span><b>${pct(p[1])}</b>Draw</span><span style="text-align:right"><b>${pct(p[2])}</b>${esc(A)}</span></div>
+      <p class="small muted mnote">From the pre-match model, the score, the time left, red cards and each side's chances (xG) so far. Updated every minute.</p></section>`;
+  }
+  // the win-probability graph: the three chances through the match (home on top, the draw in the middle, away below), goals and red cards marked
+  function winProbCard(R, eh, ea, H, A) {
+    if (!R || !(eh > 0) || !(ea > 0) || !(R.state === "in" || R.state === "post")) return "";
+    const st = matchStates(R);
+    const last = R.state === "post" ? Math.max(90, ...st.goals.map(g => g.m), ...st.reds.map(r => r.m)) : Math.max(1, nowMin(R));
+    const pts = [];
+    for (let m = 0; m <= last; m++) pts.push([m, inPlay(eh, ea, { ...st.at(m), end: Math.max(95, last + 1) })]);
+    if (R.state === "post") {                                        // full-time: the result itself
+      const T = R.teams || [], hs = +((T.find(t => t.side === "home") || {}).score || 0), as = +((T.find(t => t.side === "away") || {}).score || 0);
+      pts.push([last + 0.5, hs > as ? [1, 0, 0] : hs === as ? [0, 1, 0] : [0, 0, 1]]);
+    }
+    const W = 340, Hh = 150, top = 12, h = Hh - 2 * top, xMax = Math.max(90, last + 0.5), X = m => (m / xMax) * W, Y = v => top + v * h;
+    const band = (lo, hi) => pts.map(([m, p]) => `${X(m).toFixed(1)},${Y(hi(p)).toFixed(1)}`).join(" ") + " " + pts.slice().reverse().map(([m, p]) => `${X(m).toFixed(1)},${Y(lo(p)).toFixed(1)}`).join(" ");
+    const marks = st.goals.map(g => `<line x1="${X(g.m).toFixed(1)}" y1="${top}" x2="${X(g.m).toFixed(1)}" y2="${Hh - top}" class="wpg"/><text x="${X(g.m).toFixed(1)}" y="9" text-anchor="middle" class="mg">⚽</text>`).join("")
+      + st.reds.map(r => `<rect x="${(X(r.m) - 2.5).toFixed(1)}" y="${Hh - 10}" width="5" height="8" rx="1" fill="#D8433A"/>`).join("");
+    const lastP = pts[pts.length - 1][1];
+    return `<section class="scard winprob"><h3>Win probability</h3><svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Win probability through the match: now ${esc(H)} ${pct(lastP[0])}, draw ${pct(lastP[1])}, ${esc(A)} ${pct(lastP[2])}">
+      <polygon points="${band(() => 0, p => p[0])}" class="wph"/><polygon points="${band(p => p[0], p => p[0] + p[1])}" class="wpd"/><polygon points="${band(p => p[0] + p[1], () => 1)}" class="wpa"/>
+      <line x1="${X(45)}" y1="${top}" x2="${X(45)}" y2="${Hh - top}" class="mht"/>${marks}</svg>
+      <p class="skeys small"><span class="dot h"></span>${esc(H)}<span class="dot d"></span>Draw<span class="dot a"></span>${esc(A)}</p>
+      <p class="small muted mnote">Kwallo's chances at every minute${R.state === "in" ? ", up to now" : ""}: the share of the height is each outcome's chance.</p></section>`;
+  }
   // v35: xG under the score: Kwallo's estimate in play ("est."), the real figure once PitchAPI has the match
   const xgText = xg => xg && isFinite(xg.home) && isFinite(xg.away) ? `xG ${Number(xg.home).toFixed(2)} – ${Number(xg.away).toFixed(2)}${xg.source === "estimate" ? " <small>est.</small>" : ""}` : "";
   // the version tag changes whenever the Worker's match data changes, so phones never keep showing a day-old saved copy
-  const DATA_V = "35f";
+  const DATA_V = "36a";
   const resultUrl = root => workerApi(`result?e=${encodeURIComponent(root.dataset.ev)}&v=${DATA_V}&m=${root.dataset.live === "1" || root.dataset.started !== "1" ? Math.floor(Date.now() / 60000) : "ft"}`);
   function xgFill() {
     const root = shell.querySelector("#mroot");
@@ -547,13 +620,15 @@
     const H = root.dataset.h, A = root.dataset.a, ev = root.dataset.ev, live = root.dataset.live === "1", started = root.dataset.started === "1";
     const result = () => getJSON(resultUrl(root));
     const coach = { home: root.dataset.coachH || null, away: root.dataset.coachA || null };
-    if (key === "overview" && ev) fill("[data-ovlive]", async el => { const R = await result(); el.innerHTML = momentumCard(R, H, A) + timelineCard(R, H, A); });
+    if (key === "overview" && ev) fill("[data-ovlive]", async el => { const R = await result(), eh = +root.dataset.eh, ea = +root.dataset.ea;   // v36: live chances and their graph
+      el.innerHTML = liveChanceCard(R, eh, ea, H, A) + momentumCard(R, H, A) + winProbCard(R, eh, ea, H, A) + timelineCard(R, H, A); });
     if (key === "stats" && ev) fill("[data-stats]", async el => { const R = await result(); el.innerHTML = R && R.card ? statsCard(R.card, H, A, live) : empty("Statistics for this match aren't available yet."); });
     if (key === "lineups" && ev) fill("[data-lineups-live]", async el => {
       const R = await result(), html = lineupsLive(R, H, A, root.dataset.hs, root.dataset.as, coach, { home: root.dataset.ch || null, away: root.dataset.ca || null });
       const official = /Starting XI/.test(html);
-      el.innerHTML = html;
       const xi = shell.querySelector("[data-xi]");
+      // v36: before the team sheet, Kwallo's expected lineup comes first (the full squads only when there's no expected lineup)
+      el.innerHTML = official || !xi ? html : `<p class="small muted sheetnote">The official team sheets appear here as soon as they're announced, about an hour before kick-off. Until then, Kwallo's expected lineups:</p>`;
       if (xi && official) xi.hidden = true;                          // the team sheet replaces the expected lineup
     });
     if (key === "players") shell.querySelectorAll("[data-team-players]").forEach(el => fill(el, async el => {
@@ -622,6 +697,7 @@
           <div class="mside">${badge(Object.assign({}, m, mb_), "away")}<b>${esc(A)}</b></div>
           <button class="star ${fav.has("team:" + as) ? "on" : ""}" data-fav="team:${esc(as)}" aria-label="Favourite ${esc(A)}">★</button>
         </div>
+        ${started ? `<p class="small muted prelab">Kwallo's chances before kick-off${L0 && L0.state === "in" ? " (live chances in the Overview tab)" : ""}</p>` : ""}
         ${chanceBar(m, [H, A])}
         <div class="bar-legend num"><span><b>${pct(m.pH)}</b>${esc(H)}, fair ${odds(fairOf(m.pH))}</span><span><b>${pct(m.pD)}</b>Draw, fair ${odds(fairOf(m.pD))}</span>
           <span style="text-align:right"><b>${pct(m.pA)}</b>${esc(A)}, fair ${odds(fairOf(m.pA))}</span></div>
@@ -634,7 +710,7 @@
         <nav class="mtabs" role="tablist">${TABS_.map(([k, l]) => `<a role="tab" data-k="${k}" href="#/match/${esc(slug)}/${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</a>`).join("")}</nav></div>
       <div id="mroot" data-slug="${esc(slug)}" data-h="${esc(H)}" data-a="${esc(A)}" data-hs="${esc(hs)}" data-as="${esc(as)}" data-ev="${hasEv ? esc(ev0.code + ":" + ev0.id) : ""}"
            data-live="${L0 && L0.state === "in" ? 1 : 0}" data-started="${started ? 1 : 0}" data-coach-h="${esc(coach.home || "")}" data-coach-a="${esc(coach.away || "")}"
-           data-ch="${esc((mb_.badges.home || {}).c || "")}" data-ca="${esc((mb_.badges.away || {}).c || "")}">
+           data-ch="${esc((mb_.badges.home || {}).c || "")}" data-ca="${esc((mb_.badges.away || {}).c || "")}" data-eh="${esc(m.ExpHome ?? "")}" data-ea="${esc(m.ExpAway ?? "")}">
       <section class="section" data-tab="overview">
         ${started && hasEv ? `<div data-ovlive><p class="muted small">Loading the match timeline…</p></div>` : ""}
         ${m.Grid ? (() => { const tot = m.Grid.flat().reduce((s, x) => s + x, 0) || 1, cs = []; m.Grid.forEach((r, i) => r.forEach((x, j) => cs.push([i, j, x / tot])));
@@ -717,7 +793,7 @@
       ${(t.upcoming || []).length ? `<h2>Next matches</h2>${t.upcoming.map(u => matchRow({ slug: u.slug, kickoff: u.kickoff, Date: u.date, Home: u.venue === "H" ? t.name : u.opp, Away: u.venue === "H" ? u.opp : t.name,
           home_slug: u.venue === "H" ? slug : "", pH: u.pH, pD: u.pD, pA: u.pA, Competition: u.competition })).join("")}` : ""}
       ${(t.form || []).length ? `<h2>Recent results</h2><ul class="list">${t.form.slice().reverse().map(f => `<li class="num">${esc(f.date)}: ${f.venue === "H" ? "v" : "at"} ${esc(f.opp)} <b>${esc(f.score)}</b> ${formChips(f.result)}</li>`).join("")}</ul>` : ""}
-      ${spotted.length ? `<h2>Trends</h2><ul class="list">${spotted.map(s => `<li>${esc(s.pattern)}: ${s.count} of the last ${s.of}${s.base != null ? ` <span class="small muted">(league usually ${pct(s.base)})</span>` : ""}</li>`).join("")}</ul>` : ""}
+      ${spotted.length ? `<h2>Trends</h2><ul class="list">${spotted.map(s => `<li>${trendText(s)}</li>`).join("")}</ul>` : ""}
       ${(() => { const st = (t.trends || {}).stats || {}, rows = AVG_ROWS.filter(([kf]) => (st[kf] || [])[0] != null);          // v35: team stats
           return rows.length ? `<h2>Team stats</h2><div class="wrap"><table class="avg"><thead><tr><th>Per match</th><th class="r">for</th><th class="r">against</th></tr></thead><tbody>
             ${rows.map(([kf, ka, label]) => `<tr><td>${esc(label)}</td><td class="r num">${f1((st[kf] || [])[0])}<small class="muted"> (${f1((st[kf] || [])[1])})</small></td>
@@ -824,7 +900,7 @@
         ${P.pred ? `${chanceBar(P.pred, [H.name, A.name])}<div class="bar-legend num"><span><b>${pct(P.pred.pH)}</b>${esc(H.name)}</span><span><b>${pct(P.pred.pD)}</b>Draw</span><span style="text-align:right"><b>${pct(P.pred.pA)}</b>${esc(A.name)}</span></div>` : ""}
         ${P.top ? `<p>Top angle: <b>${esc(P.top.bet)}</b>${P.top.p != null ? ` (${pct(P.top.p)})` : ""} ${P.top.won === true ? '<span class="won">✓ came in</span>' : P.top.won === false ? '<span class="lost">✗ missed</span>' : ""}</p>` : ""}
         ${P.pred && P.pred.scores ? likeliestBlock(P.pred.scores, H.score, A.score) : ""}</section>` : ""}
-      ${momentumCard(R, H.name, A.name)}${timelineCard(R, H.name, A.name)}`;
+      ${momentumCard(R, H.name, A.name)}${P && P.pred ? winProbCard(R, P.pred.eh, P.pred.ea, H.name, A.name) : ""}${timelineCard(R, H.name, A.name)}`;
     const stats = R.card ? `<h2>Match stats</h2>${statsCard(R.card, H.name, A.name, !R.completed)}`
         : (R.stats || []).length ? `<h2>Match stats</h2><div class="wrap"><table class="mstats"><tbody>${R.stats.map(s => `<tr><td class="r num"><b>${esc(s.home)}</b></td><td class="c">${esc(s.label)}${bar(s)}</td><td class="num"><b>${esc(s.away)}</b></td></tr>`).join("")}</tbody></table></div>` : "";
     const lineups = lineupsLive(R, H.name, A.name, slugify(H.name), slugify(A.name), {});
@@ -909,9 +985,21 @@
       ${list.length ? list.map(matchRow).join("") : empty("No upcoming matches for your favourites in the next few days.")}`;
   }
 
+  // v36: install the app. Android and Chrome offer a one-tap install; on an iPhone it's Safari's Share button, then "Add to Home Screen".
+  let installPrompt = null;
+  const isApp = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  function installItem() {
+    if (isApp()) return `<li>📲 You're using the Kwallo app.</li>`;
+    const why = `<br><span class="small muted">It opens full-screen from your home screen, and shows the last matches even when you're offline.</span>`;
+    if (installPrompt) return `<li><button class="btn solid" data-install>📲 Install the Kwallo app</button>${why}</li>`;
+    if (isIOS()) return `<li>📲 <b>Install the app on your iPhone:</b> in Safari, tap the Share button, then "Add to Home Screen".${why}</li>`;
+    return `<li>📲 <b>Install the app:</b> open your browser's menu and choose "Install app" or "Add to Home screen".${why}</li>`;
+  }
   function pageMore() {
     setNav("more");
     app.innerHTML = `<h1>More</h1><ul class="list">
+      ${installItem()}
       <li><a href="#/fav">Favourites</a></li><li><a href="#/leaders">Leaders</a></li><li><a href="#/acca">Accumulator</a></li>
       ${C.channel ? `<li><a href="${tg(C.channel)}" target="_blank" rel="noopener">Kwallo on Telegram</a>: daily picks, previews and results</li>` : ""}
       ${C.bot ? `<li><a href="${tg(C.bot)}" target="_blank" rel="noopener">Match alerts bot</a>: previews, lineups and live updates for the teams you follow</li>` : ""}
@@ -945,6 +1033,15 @@
       <div class="wrap"><table class="grid"><thead><tr><th>${esc(H)} \\ ${esc(A)}</th>${[...Array(n).keys()].map(j => `<th class="r">${j}</th>`).join("")}</tr></thead><tbody>
       ${G.slice(0, n).map((r, i) => `<tr><th>${i}</th>${r.slice(0, n).map(x => `<td class="r num" style="--a:${(x / mx).toFixed(2)}">${(100 * x / tot).toFixed(1)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   }
+  // v36: a spotted trend with its scope: "Won: 7 of the last 7 home matches" (it used to drop "home" / "away", which read as all matches),
+  //      and how often it happens in that league (the pipeline calls it league_rate)
+  function trendText(s) {
+    if (typeof s === "string") return esc(s);
+    if (!s || !s.pattern) return "";
+    const sc = String(s.scope || ""), where = /home/.test(sc) ? " home matches" : /away/.test(sc) ? " away matches" : "";
+    const base = s.league_rate ?? s.base;
+    return `${esc(s.pattern)}: ${s.count} of the last ${s.of}${where}${base != null ? ` <span class="small muted">(league usually ${pct(base)})</span>` : ""}`;
+  }
   function lastSeven(t, name) {                                     // a team's last 7 matches, form and spotted trends
     if (!t || !(t.rows || []).length) return "";
     const rows = t.rows.slice(-7).reverse();
@@ -954,7 +1051,7 @@
         <td class="r num">${formChips(r.Result)} ${esc(r.Score)}</td><td class="r num small">${esc(r.xG || "–")}</td></tr>`).join("")}</tbody></table></div>
       ${rows.some(r => !r.xG) ? `<p class="small muted">xG shows "–" where no source covers that match (some cup and European ties, and leagues without xG data).</p>` : ""}
       ${rows.some(r => r.espn) ? `<p class="small muted">Tap a match for its full statistics.</p>` : ""}
-      ${(t.spotted || []).length ? `<ul class="list small">${t.spotted.slice(0, 5).map(s => `<li>${esc(typeof s === "string" ? s : (s.pattern ? `${s.pattern}: ${s.count} of the last ${s.of}${s.base != null ? `, league usually ${pct(s.base)}` : ""}` : JSON.stringify(s)))}</li>`).join("")}</ul>` : ""}`;
+      ${(t.spotted || []).length ? `<ul class="list small">${t.spotted.slice(0, 5).map(s => `<li>${trendText(s)}</li>`).join("")}</ul>` : ""}`;
   }
   const POS = [["G", "Goalkeeper"], ["D", "Defenders"], ["M", "Midfielders"], ["F", "Forwards"]];
   // v35: colour helpers for the pitch (team kits, readable numbers, rating chips)
@@ -1132,6 +1229,12 @@
 
   // ---------- one listener for every button
   document.addEventListener("click", ev => {
+    const ins = ev.target.closest("[data-install]");                 // v36: install the app (Android and Chrome)
+    if (ins && installPrompt) {
+      const p_ = installPrompt; installPrompt = null;
+      p_.prompt(); p_.userChoice.then(c => { hit(c && c.outcome === "accepted" ? "install_accepted" : "install_dismissed"); route(true); }).catch(() => {});
+      return;
+    }
     const dp = ev.target.closest("[data-datepick]");                 // v35: the 📅 opens the date picker
     if (dp && dp.showPicker) { try { dp.showPicker(); } catch (e) {} return; }
     const tabA = ev.target.closest(".mtabs a[data-k]");               // v35: match tabs switch in place
@@ -1281,6 +1384,16 @@
     const before = JSON.stringify(LIVE); await getLive(true);
     if (JSON.stringify(LIVE) !== before) { const y = window.scrollY; await route(true); try { window.scrollTo(0, y); } catch (e) {} }
   }, 60000);
+  // ---------- v36: the installable app. The service worker saves what's loaded so the app opens offline; a note shows when offline.
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+    window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => {}); });
+  }
+  const offlineNote = () => { const el = document.getElementById("offline"); if (el) el.hidden = navigator.onLine !== false; };
+  window.addEventListener("online", () => { offlineNote(); route(true); });
+  window.addEventListener("offline", offlineNote);
+  offlineNote();
+  window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installPrompt = e; if ((location.hash || "").startsWith("#/more")) route(true); });
+  window.addEventListener("appinstalled", () => { installPrompt = null; hit("app_installed"); });
   showAccaCount();
   route();
 })();

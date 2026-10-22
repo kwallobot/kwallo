@@ -11,7 +11,17 @@ if INCLUDE_NEW_LEAGUES:                                          # v29
                           "Brasileirão Série A": ("BRA", "Serie A"), "Brasileirão Série B": ("BRA", "Serie B"),
                           "Bolivia División Profesional": ("BOL", "Primera Division"), "South African Premiership": ("RSA", "Premier Soccer League"),
                           "Egyptian Premier League": ("EGY", "Premier League")})
-CALENDAR_COUNTRIES = {"USA", "BRA", "ARG", "BOL", "NOR", "SWE"}
+CALENDAR_COUNTRIES = {"USA", "BRA", "ARG", "BOL", "NOR", "SWE", "CHN", "JPN"}   # v36: China; Japan until J1's switch to August-June (see league_matches)
+# v36: PitchAPI's expected goals linked to the new predicted leagues too (by our names)
+PA_XG_LEAGUES.update({"Championship": ("ENG", "Championship"), "League One": ("ENG", "League One"), "League Two": ("ENG", "League Two"),
+                      "Segunda Division": ("ESP", "LaLiga2"), "2. Bundesliga": ("GER", "2. Bundesliga"), "Serie B": ("ITA", "Serie B"),
+                      "Ligue 2": ("FRA", "Ligue 2"), "Austrian Bundesliga": ("AUT", "Bundesliga"), "Swiss Super League": ("SUI", "Super League"),
+                      "Danish Superliga": ("DEN", "Superligaen"), "Eliteserien": ("NOR", "Eliteserien"), "Allsvenskan": ("SWE", "Allsvenskan"),
+                      "Romanian Liga I": ("ROU", "Liga I"), "Ekstraklasa": ("POL", "Ekstraklasa"), "J1 League": ("JPN", "J. League"),
+                      "Chinese Super League": ("CHN", "Super League"), **{n_: (c_, PA_OTHER_LEAGUES[c_]) for c_, n_ in PA_PREDICTED.items()}})
+# v36: leagues ESPN doesn't cover: their fixtures (and kick-off times) from PitchAPI, names linked to our results
+PA_FIXTURE_LEAGUES = {"Swiss Super League": ("SUI", "Super League"), "Romanian Liga I": ("ROU", "Liga I"), "Ekstraklasa": ("POL", "Ekstraklasa"),
+                      **{n_: (c_, PA_OTHER_LEAGUES[c_]) for c_, n_ in PA_PREDICTED.items()}}
 # v34: more competitions with PitchAPI xG, downloaded in priority order and linked to our results in section 7a
 #      (PitchAPI key -> (our competition name, priority)); 1 = European cups, 2 = leagues whose clubs play in Europe,
 #      3 = second divisions, 4 = English League One and Two
@@ -119,7 +129,7 @@ if PA_KEY:
         pcache = checked_read(PA_CACHE, text=("id", "season", "label", "league"), num=("score_home", "score_away"), name="pitchapi_matches")
         if len(pcache):
             usa_ = pcache["league"].astype(str).str.split(":").str[0].isin(CALENDAR_COUNTRIES)
-            pcache.loc[usa_, "label"] = pcache.loc[usa_, "season"]          # v21: MLS labels are its calendar-year seasons
+            pcache.loc[usa_, "label"] = pcache.loc[usa_, "season"].astype(str).str.replace(r"^\d\d(\d\d)/\d\d(\d\d)$", r"\1\2", regex=True)   # v21: MLS labels are its calendar-year seasons (v36: "2026/2027" -> "2627", J1's switch)
         done_seasons = set(zip(pcache["league"], pcache["season"])) if len(pcache) and "home_id" in pcache else set()   # v30: refetch once for team ids
         def league_matches(country, name):
             row = lg_df[(lg_df["country_code"] == country) & (lg_df["name"] == name)]
@@ -129,13 +139,17 @@ if PA_KEY:
             out = []
             calendar_year = country in CALENDAR_COUNTRIES   # v29: MLS, Brazil, Argentina and Bolivia name seasons by calendar year
             cal_labels = MLS_SEASONS[-3:] if country == "USA" else [str(TODAY.year - 2), str(TODAY.year - 1), str(TODAY.year)]
-            for lab in (cal_labels if calendar_year else SEASONS[-3:]):
-                s_ = ((lab if lab in seasons else next((x for x in seasons if str(x).endswith(lab)), None)) if calendar_year
+            labs_ = cal_labels if calendar_year else SEASONS[-3:]
+            if calendar_year and _season_str(SEASONS[-1])[0] in seasons:
+                labs_ = labs_ + [SEASONS[-1]]                  # v36: a calendar-year league that switched to August-June (J1 from 2026/27)
+            for lab in labs_:
+                split_ = len(lab) == 4 and lab == SEASONS[-1] and calendar_year
+                s_ = (_season_str(lab)[0] if split_ else (lab if lab in seasons else next((x for x in seasons if str(x).endswith(lab)), None)) if calendar_year
                       else next((x for x in _season_str(lab) if x in seasons), None))
                 if s_ is None:
                     continue
                 key_ = (f"{country}:{name}", s_)
-                if key_ in done_seasons and lab != (cal_labels[-1] if calendar_year else SEASONS[-1]):
+                if key_ in done_seasons and lab not in ((cal_labels[-1], SEASONS[-1]) if calendar_year else (SEASONS[-1],)):
                     continue                                  # finished seasons are fetched once
                 d_ = pa(f"/v1/leagues/{lid}/matches", season=s_, status="all") or {}
                 for m_ in d_.get("matches", []):
@@ -145,9 +159,9 @@ if PA_KEY:
                                 "score_home": m_.get("score_home"), "score_away": m_.get("score_away")})
             return out
         new_rows = []
-        for cc, nm in PA_OTHER_LEAGUES.items():
-            new_rows += league_matches(cc, nm)
-        for our, (cc, nm) in {**PA_XG_LEAGUES, **PA_TACTIC_LEAGUES, **{f"more:{k}": tuple(k.split(":", 1)) for k in PA_XG_MORE}}.items():
+        # v36: each PitchAPI league once, however many of our lists name it
+        for cc, nm in dict.fromkeys(list(PA_OTHER_LEAGUES.items()) + list(PA_XG_LEAGUES.values()) + list(PA_TACTIC_LEAGUES.values())
+                                    + [tuple(k.split(":", 1)) for k in PA_XG_MORE]):
             new_rows += league_matches(cc, nm)
         if new_rows:
             nr = pd.DataFrame(new_rows)
@@ -218,6 +232,47 @@ if PA_KEY:
             other_names.update({f"Other-pa-{c}": n for c, n in PA_OTHER_LEAGUES.items()})
         print(f"PitchAPI: domestic leagues found for {len(club_league)} of {len(other_names_)} clubs from other countries: "
               + ", ".join(sorted(club_league)) if club_league else "PitchAPI: no other-country clubs matched.")
+
+        # ---- v36: Czechia, Croatia, Serbia, Israel and Slovakia predicted from PitchAPI's results (no bookmaker odds), with the same
+        #      club names as the European model; and fixtures from PitchAPI for every predicted league ESPN doesn't cover ----
+        for cc_, name_ in PA_PREDICTED.items():
+            p_ = pcache[pcache["league"] == f"{cc_}:{PA_OTHER_LEAGUES[cc_]}"]
+            fin_ = p_[(p_["status"] == "finished") & p_["score_home"].notna() & p_["score_away"].notna()]
+            if len(fin_) < 200:
+                health(f"{name_} (PitchAPI)", False, f"only {len(fin_)} results so far")
+                continue
+            d_ = pd.DataFrame({"League": name_, "Season": fin_["label"].astype(str), "Date": pd.to_datetime(fin_["date"]).dt.normalize(),
+                               "HomeTeam": fin_["home"].map(lambda t: club_map.get(t, t)), "AwayTeam": fin_["away"].map(lambda t: club_map.get(t, t)),
+                               "FTHG": fin_["score_home"].astype(float), "FTAG": fin_["score_away"].astype(float)}).sort_values("Date").reset_index(drop=True)
+            for c_ in ["B365H", "B365D", "B365A", "HC", "AC", "HY", "AY", "HS", "AS"]:
+                d_[c_] = np.nan
+            SOLO[name_] = {"data": d_, "season": str(d_["Season"].iloc[-1]), "half_life": 180, "group": V36_GROUP[name_]}
+        fx_parts_ = []
+        for name_, (cc_, nm_) in PA_FIXTURE_LEAGUES.items():
+            if name_ not in SOLO:
+                continue
+            p_ = pcache[pcache["league"] == f"{cc_}:{nm_}"].copy()
+            if p_.empty:
+                continue
+            p_["d"] = pd.to_datetime(p_["date"]).dt.normalize()
+            up_ = p_[(p_["status"] != "finished") & (p_["d"] >= TODAY) & (p_["d"] <= TODAY + pd.Timedelta(days=PREDICT_DAYS))]
+            if up_.empty:
+                continue
+            if name_ in CHANCES_ONLY:                              # these five use PitchAPI's own names (European clubs renamed as above)
+                mp_ = {t: club_map.get(t, t) for t in set(p_["home"]) | set(p_["away"])}
+            else:                                                  # Switzerland, Romania, Poland: linked to football-data.co.uk's names
+                fin_ = p_[p_["status"] == "finished"]
+                mp_ = map_by_fixtures(fin_.rename(columns={"date": "Date", "home": "H", "away": "A"})[["Date", "H", "A"]],
+                                      SOLO[name_]["data"][["Date", "HomeTeam", "AwayTeam"]].rename(columns={"HomeTeam": "H", "AwayTeam": "A"}))
+            up_ = up_[up_["home"].isin(mp_) & up_["away"].isin(mp_)]
+            ko_ = pd.to_datetime(up_["date"], utc=True, errors="coerce").dt.tz_convert(None)
+            ko_ = ko_.where(ko_ != ko_.dt.normalize())               # a date without a time is "time to be confirmed"
+            fx_parts_.append(pd.DataFrame({"League": name_, "Date": up_["d"], "Kickoff": ko_,
+                                           "HomeTeam": up_["home"].map(mp_), "AwayTeam": up_["away"].map(mp_)}))
+        if fx_parts_:
+            EXTRA_FIXTURES = pd.concat([EXTRA_FIXTURES] + fx_parts_, ignore_index=True)
+        print(f"PitchAPI (v36): {sum(n_ in SOLO for n_ in PA_PREDICTED.values())} of 5 leagues loaded from its results; "
+              f"{sum(len(f_) for f_ in fx_parts_)} fixtures for leagues ESPN doesn't cover.")
 
         # ---- (b) expected goals for leagues Understat doesn't cover (time-limited, newest first, cached) ----
         XGP = f"{SAVE_DIR}/pitchapi_xg.csv"

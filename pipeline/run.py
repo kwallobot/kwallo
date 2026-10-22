@@ -40,7 +40,7 @@ def display(x):
     print(x.to_string() if hasattr(x, "to_string") else x)
 
 CHECKPOINTS = {"03_c2b_espn.py", "05_c2d_pitchapi.py", "06_c2e_bsd_context.py", "08_c3b_player.py"}   # v30: save progress after the slow downloads
-OPTIONAL = {"c10_experiments.py", "c8f_lower.py", "c8h_ml.py"}                                  # skipped if the run is short of time
+OPTIONAL = {"c10_experiments.py", "c10b_playerelo.py", "c8f_lower.py", "c8h_ml.py"}             # skipped if the run is short of time
 TIME_BUDGET_MIN = float(os.environ.get("PITCHLAB_TIME_BUDGET", "280" if MODE == "full" else "70"))
 
 def main():

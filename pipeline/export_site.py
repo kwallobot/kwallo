@@ -77,10 +77,11 @@ def export(ns, data_dir, mode):
                  "corners": pair_(r, "HC", "AC"), "cards": pair_(r, "HY", "AY"),
                  "espn": r.espn if isinstance(getattr(r, "espn", None), str) and ":" in r.espn else None} for r in d_.itertuples()]
     matches, details, teams = [], {}, {}
+    chances_only = set(ns.get("CHANCES_ONLY") or [])                # v36: leagues without bookmaker odds: result chances only
     for m in P.get("predictions", []):
         k = (m["Competition"], str(m["Date"])[:10], m["Home"], m["Away"])
         ms = f"{k[1]}-{slug(k[2])}-v-{slug(k[3])}"
-        v = public_verdict(get("verdicts", k))
+        v = None if k[0] in chances_only else public_verdict(get("verdicts", k))
         xi = get("expected_xi", k) or {}
         row = clean({**{c: m.get(c) for c in ["Competition", "Group", "Date", "Home", "Away", "pH", "pD", "pA", "pBTTS", "pOver25", "ExpHome", "ExpAway",
                                                "ExpCards", "ExpCardsH", "ExpCardsA", "pOverCards", "ExpCorners", "pOverCorners", "Note", "Absent", "Grid"]},
@@ -93,8 +94,9 @@ def export(ns, data_dir, mode):
                      "confirmed": {s: bool((xi.get(s) or {}).get("confirmed")) for s in ("home", "away")}})
         matches.append({x: row.get(x) for x in ["slug", "Competition", "league_slug", "Date", "kickoff", "Home", "Away", "home_slug", "away_slug", "espn", "badges",
                                             "pH", "pD", "pA", "fair", "pBTTS", "pOver25", "top_pick", "confirmed"]})
-        details[ms] = clean({"match": row, "verdict": v, "markets": get("markets", k), "expected_xi": xi, "last_time": get("last_time", k),
-                             "scorers": get("scorers", k), "trends": {"home": (P.get("trends") or {}).get(k[2]), "away": (P.get("trends") or {}).get(k[3])},
+        lim_ = k[0] in chances_only
+        details[ms] = clean({"match": row, "verdict": v, "markets": None if lim_ else get("markets", k), "expected_xi": xi, "last_time": get("last_time", k),
+                             "scorers": None if lim_ else get("scorers", k), "trends": {"home": (P.get("trends") or {}).get(k[2]), "away": (P.get("trends") or {}).get(k[3])},
                              "team_style": {t: (P.get("team_style") or {}).get(t) for t in (k[2], k[3])}, "h2h": h2h(k[2], k[3]),
                              "timing": (ns.get("GOAL_TIMING") or {}).get(k),                              # v35: goals by 15-minute period
                              "coach": {s_: ((xi.get(s_) or {}).get("coach") or (ns.get("COACH_OF") or {}).get(t_)) for s_, t_ in (("home", k[2]), ("away", k[3]))}})

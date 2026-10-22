@@ -311,6 +311,20 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .mcell:hover { border-color: var(--brand); }
 .mcell.added { background: var(--brand); border-color: var(--brand); }
 .mcell.added .mo, .mcell.added .mp, .mcell.added .ml { color: var(--bg); }
+/* v36: the live view: live chances, and the win-probability graph (home on top, draw in the middle, away below) */
+.livechance .bar { margin-left: 0; height: 14px; } .livechance .bar-legend { margin-left: 0; color: var(--ink); }
+.livechance .bar-legend span b { display: block; font-size: 1.25rem; }
+.livechance h3 .live { color: var(--warn); font-size: .85rem; margin-left: .3rem; }
+.winprob svg { width: 100%; height: auto; display: block; }
+.winprob .wph { fill: var(--home); } .winprob .wpd { fill: var(--draw); } .winprob .wpa { fill: var(--away); opacity: .85; }
+.winprob .wpg { stroke: var(--bg); stroke-width: 1; stroke-dasharray: 2 2; } .winprob .mg { font-size: 9px; }
+.winprob .skeys { justify-content: center; margin: .4rem 0; } .dot.d { background: var(--draw); }
+.prelab { margin: .4rem 0 0; }
+/* v36: the installable app: a note when offline, and the install button on the More page */
+.offline { margin: 0; padding: .45rem 1rem; text-align: center; font-size: .85rem; font-weight: 600; background: var(--warn); color: var(--bg); }
+.offline[hidden] { display: none; }
+[data-install] { margin-bottom: .2rem; }
+@media (display-mode: standalone) { body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); } }
 /* v35: not rated by PitchAPI (on for the last few minutes): a grey chip */
 .rchip.r0 { background: #A9B5B0; } .pitchfig .prn { fill: #A9B5B0; }
 /* v35: smooth swipes between dates and tabs: the page leaves sideways moves to the site (up-and-down scrolling and zoom stay the browser's),

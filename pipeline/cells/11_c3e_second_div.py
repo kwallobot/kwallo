@@ -36,10 +36,11 @@ def fit_two_div(top_data, d2_data, half_life=365, alpha=0.01):
     m.cols = X.columns
     return m
 
-def two_div_means(m, games):
+def two_div_means(m, games, level=0.0):
+    """Expected goals for `games` played in the top division (level 0) or, v36, in the second division (level 1)."""
     n = len(games)
-    Xh = make_X(games["HomeTeam"].values, games["AwayTeam"].values, np.ones(n), [c for c in m.cols if c != "div2"]); Xh["div2"] = 0.0
-    Xa = make_X(games["AwayTeam"].values, games["HomeTeam"].values, np.zeros(n), [c for c in m.cols if c != "div2"]); Xa["div2"] = 0.0
+    Xh = make_X(games["HomeTeam"].values, games["AwayTeam"].values, np.ones(n), [c for c in m.cols if c != "div2"]); Xh["div2"] = 10.0 * level
+    Xa = make_X(games["AwayTeam"].values, games["HomeTeam"].values, np.zeros(n), [c for c in m.cols if c != "div2"]); Xa["div2"] = 10.0 * level
     return m.predict(Xh[m.cols]), m.predict(Xa[m.cols])
 
 print(f"Second-division ratings for promoted teams: {'ON' if SECOND_DIV.get('on') else 'off'}.")
