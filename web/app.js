@@ -63,6 +63,20 @@
   }
   const longDate = d => new Date(String(d).slice(0, 10) + "T12:00:00").toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
   const ordinal = n => n + (["th", "st", "nd", "rd"][((n % 100) - 20) % 10] || ["th", "st", "nd", "rd"][n % 100] || "th");
+  // v35: smooth swipes. After a date swipe the new day slides in from that side; tab rows slide to keep the chosen tab in view.
+  let slideFrom = 0, dayBarX = null;
+  const slideIn = (el, from) => { if (el && from && el.animate) el.animate([{ transform: `translateX(${from * 30}%)`, opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 220, easing: "cubic-bezier(.2,.7,.3,1)" }); };
+  function centreIn(bar, b, smooth) {
+    if (!bar || !b) return;
+    const left = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2);
+    if (smooth && bar.scrollTo) bar.scrollTo({ left, behavior: "smooth" }); else bar.scrollLeft = left;
+  }
+  function dayTabsInView(day) {                                     // the chosen day in view, sliding from where the row was before a swipe
+    const bar = shell.querySelector("[data-daytabs]"), b = bar && bar.querySelector("button.on");
+    if (bar && dayBarX != null) { bar.scrollLeft = dayBarX; dayBarX = null; centreIn(bar, b, true); } else centreIn(bar, b, false);
+    [-1, 1].forEach(s => { const d = new Date(day + "T12:00:00"); d.setDate(d.getDate() + s); warmDay(localDay(d)); });   // the days either side, ready for a swipe
+  }
+  const warmDay = d => { if (d >= PAST_FROM && d < localDay(Date.now())) get(`days/${d}.json`).catch(() => {}); };
 
   // ---------- favourites and the accumulator live in this browser only
   const fav = { list: () => store.get("fav", []), has: s => store.get("fav", []).includes(s),
@@ -180,13 +194,14 @@
     const rank = c => (BIG.indexOf(c) + 1) || 99;
     const order = Object.keys(groups).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
     const f = (k, l) => `<button class="chip ${filter === k ? "on" : ""}" data-go="#/day/${day}/${k}">${l}</button>`;
-    app.innerHTML = `<h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} match${list.length === 1 ? "" : "es"}.</p>
+    app.innerHTML = `<div id="dayroot" hidden data-day="${day}" data-filter="${esc(filter)}" data-max="${days[days.length - 1]}"></div>
+      <h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} match${list.length === 1 ? "" : "es"}.</p>
       <div class="daybar"><div class="tabs" role="tablist" data-daytabs>${dayTabs}</div>${picker}</div>
       <div class="tabs">${f("all", "All")}${f("live", `● Live${Object.values(LIVE).some(x => x.state === "in") ? ` (${ms.filter(m => (LIVE[m.slug] || {}).state === "in").length})` : ""}`)}${f("big", "Big games")}${f("europe", "Europe")}${f("nigeria", "Nigeria")}${f("fav", "★ Favourites")}</div>
-      ${order.length ? order.map(c => compCard("day:" + c, c, REGION[c], groups[c].length, groups[c].map(matchRow).join(""), false)).join("")
+      <div class="swipez">${order.length ? order.map(c => compCard("day:" + c, c, REGION[c], groups[c].length, groups[c].map(matchRow).join(""), false)).join("")
         : empty(filter === "fav" ? "None of your favourites play on this day. Tap ★ on a match, or on a team in its match page." : filter === "live" ? "No matches in play right now." : "No matches for this filter on this day.")}
-      <p class="small muted">Updated ${idx.meta && idx.meta.updated ? esc(new Date(idx.meta.updated).toLocaleString()) : "recently"}. Chances are the model's; fair odds are the break-even price.</p>`;
-    afterRender = () => { const b = shell.querySelector("[data-daytabs] button.on"), bar = shell.querySelector("[data-daytabs]"); if (b && bar) bar.scrollLeft = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2); };   // v35: today in view
+      <p class="small muted">Updated ${idx.meta && idx.meta.updated ? esc(new Date(idx.meta.updated).toLocaleString()) : "recently"}. Chances are the model's; fair odds are the break-even price.</p></div>`;
+    afterRender = () => dayTabsInView(day);                         // v35: today in view
   }
 
   const PAST_FROM = "2025-07-01";
@@ -213,13 +228,15 @@
       return x.espn ? `<a class="mrow" href="#/result/${encodeURIComponent(x.espn)}/${day}">${inner}</a>` : `<div class="mrow">${inner}</div>`;
     };
     const f = (k, l) => `<button class="chip ${filter === k ? "on" : ""}" data-go="#/day/${day}/${k}">${l}</button>`;
-    app.innerHTML = `<h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} result${list.length === 1 ? "" : "s"}.</p>
+    const maxDay = (picker.match(/max="([\d-]+)"/) || [])[1] || day;
+    app.innerHTML = `<div id="dayroot" hidden data-day="${day}" data-filter="${esc(filter)}" data-max="${maxDay}"></div>
+      <h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} result${list.length === 1 ? "" : "s"}.</p>
       <div class="daybar"><div class="tabs" role="tablist" data-daytabs>${dayTabs}</div>${picker}</div>
       <div class="tabs">${f("all", "All")}${f("big", "Big games")}${f("europe", "Europe")}${f("nigeria", "Nigeria")}${f("fav", "★ Favourites")}</div>
-      ${order.length ? order.map(c => compCard("day:" + c, c, REGION[c], groups[c].length, groups[c].map(row).join(""), false)).join("")
+      <div class="swipez">${order.length ? order.map(c => compCard("day:" + c, c, REGION[c], groups[c].length, groups[c].map(row).join(""), false)).join("")
         : empty(D ? "No results for this filter on this day." : day < PAST_FROM ? "Results go back to the start of the 2025/26 season." : "No results on this day.")}
-      <p class="small muted">Tap a match for its statistics, timeline and lineups. ✓ / ✗ shows whether Kwallo's top angle for the match came in.</p>`;
-    afterRender = () => { const b = shell.querySelector("[data-daytabs] button.on"), bar = shell.querySelector("[data-daytabs]"); if (b && bar) bar.scrollLeft = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2); };
+      <p class="small muted">Tap a match for its statistics, timeline and lineups. ✓ / ✗ shows whether Kwallo's top angle for the match came in.</p></div>`;
+    afterRender = () => dayTabsInView(day);
     hit("past_day");
   }
 
@@ -398,7 +415,7 @@
     if (!mo || !(mo.home || []).length) return "";
     const W = 340, Hh = 150, mid = Hh / 2, n = 90, bw = W / n, upto = mo.upto || 90;
     const vals = [...mo.home.slice(1, upto + 1), ...mo.away.slice(1, upto + 1)].filter(x => x > 0).sort((a, b) => a - b);
-    const mx = Math.max(mo.source === "xg" ? 0.15 : 0.5, vals.length ? vals[Math.floor(0.95 * (vals.length - 1))] : 0.5);   // one big spike doesn't flatten the rest
+    const mx = Math.max(/^xg/.test(mo.source) ? 0.15 : 0.5, vals.length ? vals[Math.floor(0.95 * (vals.length - 1))] : 0.5);   // one big spike doesn't flatten the rest
     const bars = (arr, up) => arr.slice(1, upto + 1).map((v, i) => { const h = Math.sqrt(Math.min(1, v / mx)) * (mid - 16); if (h < 0.5) return "";
       return `<rect x="${(i * bw + 0.4).toFixed(1)}" y="${up ? (mid - h).toFixed(1) : mid}" width="${(bw - 0.8).toFixed(1)}" height="${h.toFixed(1)}" class="${up ? "mh" : "ma"}"/>`; }).join("");
     const goals = (mo.goals || []).map(g => `<text x="${((g.m - 0.5) * bw).toFixed(1)}" y="${g.side === "h" ? 11 : Hh - 3}" text-anchor="middle" class="mg">⚽</text>`).join("");
@@ -406,7 +423,15 @@
       <rect x="0" y="14" width="${W}" height="${mid - 14}" class="mzh"/><rect x="0" y="${mid}" width="${W}" height="${mid - 14}" class="mza"/>
       ${bars(mo.home, true)}${bars(mo.away, false)}<line x1="${45 * bw}" y1="14" x2="${45 * bw}" y2="${Hh - 14}" class="mht"/>${goals}</svg>
       <p class="skeys small"><span class="dot h"></span>${esc(H)}<span class="dot a"></span>${esc(A)}</p>
-      <p class="small muted mnote">${mo.source === "xg" ? "From the quality (xG) of every shot." : "From shots, chances and corners, minute by minute."}</p></section>`;
+      <p class="small muted mnote">${mo.source === "xg" ? "From the quality (xG) of every shot." : mo.source === "xg_est" ? "From Kwallo's estimate of every shot's quality (xG)." : "From shots, chances and corners, minute by minute."}</p></section>`;
+  }
+  // v35: xG under the score: Kwallo's estimate in play ("est."), the real figure once PitchAPI has the match
+  const xgText = xg => xg && isFinite(xg.home) && isFinite(xg.away) ? `xG ${Number(xg.home).toFixed(2)} – ${Number(xg.away).toFixed(2)}${xg.source === "estimate" ? " <small>est.</small>" : ""}` : "";
+  const resultUrl = root => workerApi(`result?e=${encodeURIComponent(root.dataset.ev)}&m=${root.dataset.live === "1" || root.dataset.started !== "1" ? Math.floor(Date.now() / 60000) : "ft"}`);
+  function xgFill() {
+    const root = shell.querySelector("#mroot");
+    if (!root || !root.dataset.ev) return;
+    getJSON(resultUrl(root)).then(R => shell.querySelectorAll("[data-xgline]").forEach(el => { el.innerHTML = xgText(R.xg); })).catch(() => {});
   }
   function timelineCard(R, H, A) {                                  // v35: goals, cards and substitutions, newest first
     const T = (R || {}).timeline || [];
@@ -424,8 +449,16 @@
     };
     return `<section class="scard timeline"><div class="tlhead"><span>${head}</span></div>${T.map(row).join("")}</section>`;
   }
+  function likeliestBlock(scores, hs, as) {                         // v35: the model's five likeliest scores; after full-time, ✓ / ✗
+    if (!(scores || []).length) return "";
+    const done = hs != null && as != null && hs !== "" && as !== "";
+    const hit = done ? scores.findIndex(s => s[0] === Number(hs) && s[1] === Number(as)) : -1;
+    return `<h3>${done ? "Kwallo's likeliest scores before kick-off" : "Likeliest scores"}</h3><p class="num scores">${scores.map((s, i) =>
+        `<span class="sc ${i === hit ? "hit" : ""}"><b>${s[0]}–${s[1]}</b> ${pct(s[2])}${i === hit ? ' <span class="won">✓</span>' : ""}</span>`).join(" · ")}</p>
+      ${done && hit < 0 ? `<p class="small"><span class="lost">✗</span> The final score, ${esc(hs)}–${esc(as)}, wasn't in our top 5.</p>` : ""}`;
+  }
   const ratingChip = r => r == null ? "" : `<span class="rchip ${r >= 7.5 ? "r1" : r >= 7 ? "r2" : r >= 6.5 ? "r3" : "r4"}">${Number(r).toFixed(1)}</span>`;
-  function lineupsLive(R, H, A, hsl, asl, coach) {                 // v35: the official team sheet, bench and substitutions (ESPN)
+  function lineupsLive(R, H, A, hsl, asl, coach, colors) {         // v35: the official team sheet, bench and substitutions (ESPN)
     const L = (R || {}).lineups || [];
     const ok = L.length === 2 && L.every(l => (l.xi || []).length >= 11);
     if (!ok) {
@@ -437,7 +470,8 @@
         <div class="stat-grid two"><div><h3>${esc(H)}</h3>${list(S.home, hsl)}</div><div><h3>${esc(A)}</h3>${list(S.away, asl)}</div></div>`;
     }
     const side = s => L.find(l => l.side === s) || {};
-    const asXI = l => ({ ours: (l.xi || []).map(p => ({ Player: p.name, Pos: p.pos, Line: posLine(p.pos), p: 1, id: p.id })), confirmed: true, formation: l.formation });
+    const asXI = l => ({ ours: (l.xi || []).map(p => ({ Player: p.name, Pos: p.pos, Line: posLine(p.pos), p: 1, id: p.id, jersey: p.jersey, rating: p.rating })), confirmed: true, formation: l.formation });
+    const kit = s => (colors || {})[s] || ((R.teams || []).find(t => t.side === s) || {}).color || null;   // v35: team colours on the pitch
     const ev = p => `${"⚽".repeat(Math.min(p.goals || 0, 4))}${p.yellow ? '<i class="cardi y"></i>' : ""}${p.red ? '<i class="cardi r"></i>' : ""}`;
     const block = (s, ts) => { const l = side(s), co = (coach || {})[s];
       const used = (l.bench || []).filter(p => p.on != null), unused = (l.bench || []).filter(p => p.on == null);
@@ -450,7 +484,7 @@
         ${unused.length ? `<h3>${used.length ? "Unused substitutes" : "Substitutes"}</h3><ul class="list sq">${unused.map(p => `<li><span class="jn num">${esc(p.jersey)}</span><span class="who">${pl(p)}<br><span class="small muted">${esc(p.pos)}</span></span></li>`).join("")}</ul>` : ""}
       </div>`; };
     return `<h2>Lineups</h2><p class="small muted">Official team sheets${R.completed ? "; ratings after full-time" : ""}.</p>
-      ${pitchSVG(asXI(side("home")), asXI(side("away")), H, A, null, null, hsl, asl)}
+      ${pitchSVG(asXI(side("home")), asXI(side("away")), H, A, kit("home"), kit("away"), hsl, asl)}
       <div class="pswitch lswitch" role="tablist"><button data-lside="home" class="on">${esc(H)}</button><button data-lside="away">${esc(A)}</button></div>
       ${block("home", hsl)}${block("away", asl)}`;
   }
@@ -478,12 +512,12 @@
     const root = shell.querySelector("#mroot");
     if (!root) return;
     const H = root.dataset.h, A = root.dataset.a, ev = root.dataset.ev, live = root.dataset.live === "1", started = root.dataset.started === "1";
-    const result = () => getJSON(workerApi(`result?e=${encodeURIComponent(ev)}&m=${live || !started ? Math.floor(Date.now() / 60000) : "ft"}`));
+    const result = () => getJSON(resultUrl(root));
     const coach = { home: root.dataset.coachH || null, away: root.dataset.coachA || null };
     if (key === "overview" && ev) fill("[data-ovlive]", async el => { const R = await result(); el.innerHTML = momentumCard(R, H, A) + timelineCard(R, H, A); });
     if (key === "stats" && ev) fill("[data-stats]", async el => { const R = await result(); el.innerHTML = R && R.card ? statsCard(R.card, H, A, live) : empty("Statistics for this match aren't available yet."); });
     if (key === "lineups" && ev) fill("[data-lineups-live]", async el => {
-      const R = await result(), html = lineupsLive(R, H, A, root.dataset.hs, root.dataset.as, coach);
+      const R = await result(), html = lineupsLive(R, H, A, root.dataset.hs, root.dataset.as, coach, { home: root.dataset.ch || null, away: root.dataset.ca || null });
       const official = /Starting XI/.test(html);
       el.innerHTML = html;
       const xi = shell.querySelector("[data-xi]");
@@ -512,9 +546,9 @@
     links.forEach(a => { const on = a.dataset.k === key; a.classList.toggle("on", on); a.setAttribute("aria-selected", String(on)); });
     const on = links.find(a => a.dataset.k === key), hdr0 = document.querySelector("header.top");
     if (hdr0) document.documentElement.style.setProperty("--hdr", hdr0.offsetHeight + "px");   // pinned bars sit right under the header, whatever its height
-    bar.scrollLeft = Math.max(0, on.offsetLeft - (bar.clientWidth - on.offsetWidth) / 2);   // the chosen tab stays in view
+    centreIn(bar, on, byUser);                                        // the chosen tab stays in view (sliding there when you change tab)
     if (byUser) {
-      try { history.replaceState(null, "", `#/match/${root.dataset.slug}/${key}`); } catch (e) {}
+      try { history.replaceState(null, "", `${root.dataset.base || "#/match/" + root.dataset.slug}/${key}`); } catch (e) {}
       const anchor = shell.querySelector("#tabanchor"), hdr = document.querySelector("header.top");
       const target = anchor.getBoundingClientRect().top + window.scrollY - (hdr ? hdr.offsetHeight : 0);
       if (window.scrollY > target) window.scrollTo(0, target);       // the new tab starts at its top, under the tab bar
@@ -550,7 +584,7 @@
         <div class="mhead">
           <button class="star ${fav.has("team:" + hs) ? "on" : ""}" data-fav="team:${esc(hs)}" aria-label="Favourite ${esc(H)}">★</button>
           <div class="mside">${badge(Object.assign({}, m, mb_), "home")}<b>${esc(H)}</b></div>
-          <div class="mcentre num" id="mcentre">${L0 && L0.state !== "pre" ? `<b class="score">${L0.hs}–${L0.as}</b><span class="${L0.state === "in" ? "live" : "muted"}">${esc(L0.detail || "")}</span>`
+          <div class="mcentre num" id="mcentre">${L0 && L0.state !== "pre" ? `<b class="score">${L0.hs}–${L0.as}</b><span class="${L0.state === "in" ? "live" : "muted"}">${esc(L0.detail || "")}</span>${hasEv ? `<span class="xgl" data-xgline></span>` : ""}`
               : `<b class="score">${esc(timeOf(m))}</b><span class="muted">${esc(dayLabel(String(m.Date).slice(0, 10)))}</span>`}</div>
           <div class="mside">${badge(Object.assign({}, m, mb_), "away")}<b>${esc(A)}</b></div>
           <button class="star ${fav.has("team:" + as) ? "on" : ""}" data-fav="team:${esc(as)}" aria-label="Favourite ${esc(A)}">★</button>
@@ -562,15 +596,17 @@
       </section>
       <div id="tabanchor"></div>
       <div class="mstick"><div class="minibar" aria-hidden="true">${badge(Object.assign({}, m, mb_), "home")}<b class="mn">${esc(H)}</b>
-          <span class="ms num">${L0 && L0.state !== "pre" ? `<b>${L0.hs}–${L0.as}</b>${L0.state === "in" ? ` <span class="live">${esc(L0.detail || "")}</span>` : ` <span class="muted">${esc(L0.detail || "FT")}</span>`}` : `<b>${esc(timeOf(m))}</b>`}</span>
+          <span class="ms num">${L0 && L0.state !== "pre" ? `<b>${L0.hs}–${L0.as}</b>${L0.state === "in" ? ` <span class="live">${esc(L0.detail || "")}</span>` : ` <span class="muted">${esc(L0.detail || "FT")}</span>`}${hasEv ? `<small class="xgl" data-xgline></small>` : ""}` : `<b>${esc(timeOf(m))}</b>`}</span>
           <b class="mn r">${esc(A)}</b>${badge(Object.assign({}, m, mb_), "away")}</div>
         <nav class="mtabs" role="tablist">${TABS_.map(([k, l]) => `<a role="tab" data-k="${k}" href="#/match/${esc(slug)}/${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</a>`).join("")}</nav></div>
       <div id="mroot" data-slug="${esc(slug)}" data-h="${esc(H)}" data-a="${esc(A)}" data-hs="${esc(hs)}" data-as="${esc(as)}" data-ev="${hasEv ? esc(ev0.code + ":" + ev0.id) : ""}"
-           data-live="${L0 && L0.state === "in" ? 1 : 0}" data-started="${started ? 1 : 0}" data-coach-h="${esc(coach.home || "")}" data-coach-a="${esc(coach.away || "")}">
+           data-live="${L0 && L0.state === "in" ? 1 : 0}" data-started="${started ? 1 : 0}" data-coach-h="${esc(coach.home || "")}" data-coach-a="${esc(coach.away || "")}"
+           data-ch="${esc((mb_.badges.home || {}).c || "")}" data-ca="${esc((mb_.badges.away || {}).c || "")}">
       <section class="section" data-tab="overview">
         ${started && hasEv ? `<div data-ovlive><p class="muted small">Loading the match timeline…</p></div>` : ""}
         ${m.Grid ? (() => { const tot = m.Grid.flat().reduce((s, x) => s + x, 0) || 1, cs = []; m.Grid.forEach((r, i) => r.forEach((x, j) => cs.push([i, j, x / tot])));
-            return `<h3>Likeliest scores</h3><p class="num">${cs.sort((a_, b_) => b_[2] - a_[2]).slice(0, 5).map(([i, j, p]) => `<b>${i}–${j}</b> ${pct(p)}`).join(" · ")}</p>`; })() : ""}
+            const fin = L0 && L0.state === "post";                    // v35: finished: ✓ on the actual score if it was in our top 5
+            return likeliestBlock(cs.sort((a_, b_) => b_[2] - a_[2]).slice(0, 5), fin ? L0.hs : null, fin ? L0.as : null); })() : ""}
         ${v.best && v.best.length ? `<h3>Top angle</h3><p><b>${esc(v.best[0].Bet)}</b>, ${pct(v.best[0].p)}, fair ${odds(v.best[0].fair)}.</p>` : ""}
         ${m.pBTTS != null || m.pOver25 != null ? `<p>${m.pBTTS != null ? `Both teams to score ${pct(m.pBTTS)}. ` : ""}${m.pOver25 != null ? `Over 2.5 goals ${pct(m.pOver25)}.` : ""}</p>` : ""}
         ${m.Absent ? `<h3>Likely missing</h3><p class="small">${esc(m.Absent)}</p>` : ""}
@@ -623,7 +659,7 @@
     const root = app.querySelector("#mroot");
     TABS_.forEach(([k]) => { if (!root.querySelector(`[data-tab="${k}"]`)) root.insertAdjacentHTML("beforeend", `<section class="section" data-tab="${k}">${empty(EMPTY_TAB[k] || "Nothing here yet.")}</section>`); });
     root.querySelectorAll("[data-tab]").forEach(s => { s.hidden = s.dataset.tab !== tab; });
-    afterRender = () => showTab(tab, false);
+    afterRender = () => { showTab(tab, false); if (hasStats) xgFill(); };
     hit("match");
   }
 
@@ -685,9 +721,23 @@
     const p = await get(`player/${slug}.json`);
     const labels = p.labels || {};
     const sections = {};
-    Object.entries(p.stats || {}).forEach(([k, v]) => { const l = labels[k] || { label: k, section: "Other" }; (sections[l.section || "Other"] = sections[l.section || "Other"] || []).push({ k, l, v }); });
+    Object.entries(p.stats || {}).forEach(([k, v]) => { const l = labels[k] || { label: k, section: "Other" };
+      if (!String(l.label || "").trim()) return;                      // a statistic without a name isn't shown
+      (sections[l.section || "Other"] = sections[l.section || "Other"] || []).push({ k, l, v }); });
     const val = v => (v && typeof v === "object" ? v : { total: v });
     const n1 = x => (x != null && isFinite(x) ? Math.round(x * 10) / 10 : "–"), n2 = x => (x != null && isFinite(x) ? Number(x).toFixed(2) : "–");
+    // a player who plays the full match every time has the same per-90 and per-match figures: one column is enough
+    const full = p.matches > 0 && p.minutes / p.matches >= 88;
+    // the fastest of his matches (the source now and then records an impossible speed: anything over 40 km/h is left out)
+    const best = k => { const xs = (p.log || []).map(g => Number((g.stats || {})[k])).filter(x => isFinite(x) && x > 0 && x <= 40); return xs.length ? Math.max(...xs) : null; };
+    const statRow = ({ k, l, v }) => {                                // [total, per 90, per match]; some statistics only make sense as one figure
+      const x = val(v), share = /accuracy|percent|pct/i.test(k);
+      if (/topspeed/i.test(k)) { const b = best(k); return b == null ? null : [`${n1(b)} km/h <small class="muted">fastest</small>`, "", ""]; }
+      if (share && x.average != null && x.average > 1) return null;   // an "accuracy" that isn't a share isn't shown
+      if (x.average != null) return [share ? pct(x.average) : `${n2(x.average)} <small class="muted">average</small>`, "", ""];
+      if (/^minutes/i.test(k)) return [n1(x.total), "", n2(x.per_match)];
+      return [n1(x.total), n2(x.per90), n2(x.per_match)];
+    };
     const tb = await transfersBlock(p.espn_id || espnId);
     app.innerHTML = `${backBar()}<h1>${esc(p.name)}</h1>
       <p class="muted"><a href="#/team/${esc(p.team_slug)}">${esc(p.team)}</a>${p.position ? `, ${esc(p.position)}` : ""}. ${p.matches || 0} matches, ${p.minutes || 0} minutes this season.</p>
@@ -696,9 +746,9 @@
       ${(p.by_competition || []).length > 0 ? `<h3>By competition</h3><div class="wrap"><table><thead><tr><th>Competition</th><th class="r">Apps</th><th class="r">Mins</th><th class="r">Goals</th><th class="r">Assists</th><th class="r">xG</th><th class="r">xA</th></tr></thead><tbody>
         ${p.by_competition.map(c => `<tr><td>${esc(c.competition)}</td><td class="r num">${c.matches}</td><td class="r num">${c.minutes}</td><td class="r num">${c.goals != null ? Math.round(c.goals) : "–"}</td>
           <td class="r num">${c.assists != null ? Math.round(c.assists) : "–"}</td><td class="r num">${c.xg != null ? Number(c.xg).toFixed(2) : "–"}</td><td class="r num">${c.xa != null ? Number(c.xa).toFixed(2) : "–"}</td></tr>`).join("")}</tbody></table></div>` : ""}
-      ${Object.keys(sections).length ? Object.entries(sections).map(([s, xs]) => `<h3>${esc(s)}</h3><div class="wrap"><table><thead><tr><th>Statistic</th><th class="r">Total</th><th class="r">Per 90</th><th class="r">Per match</th></tr></thead><tbody>
-        ${xs.sort((a, b) => (a.l.order || 0) - (b.l.order || 0)).map(({ l, v }) => { const x = val(v); return `<tr><td>${esc(l.label || "")}</td><td class="r num">${n1(x.total)}</td>
-          <td class="r num">${n2(x.per90)}</td><td class="r num">${n2(x.per_match)}</td></tr>`; }).join("")}</tbody></table></div>`).join("") : empty("No statistics this season yet.")}
+      ${Object.keys(sections).length ? Object.entries(sections).map(([s, xs]) => { const rows = xs.sort((a, b) => (a.l.order || 0) - (b.l.order || 0)).map(r => [r.l, statRow(r)]).filter(([, c]) => c);
+          return rows.length ? `<h3>${esc(s)}</h3><div class="wrap"><table><thead><tr><th>Statistic</th><th class="r">Total</th><th class="r">Per 90</th>${full ? "" : `<th class="r">Per match</th>`}</tr></thead><tbody>
+        ${rows.map(([l, c]) => `<tr><td>${esc(l.label)}</td><td class="r num">${c[0]}</td><td class="r num">${c[1]}</td>${full ? "" : `<td class="r num">${c[2]}</td>`}</tr>`).join("")}</tbody></table></div>` : ""; }).join("") : empty("No statistics this season yet.")}
       <h2 id="recent">Recent matches</h2>${(p.log || []).length ? `<ul class="list">${p.log.slice().reverse().map(g => `<li class="num">${esc(g.date)}: ${esc(g.competition || "")} ${g.started === false ? "(sub)" : ""}
           <span class="small muted">${Object.entries(g.stats || {}).slice(0, 6).map(([k, x]) => `${esc((labels[k] || {}).label || k)} ${esc(x)}`).join(", ")}</span></li>`).join("")}</ul>` : empty("No recent matches on record.")}
       ${tb}
@@ -719,7 +769,7 @@
       ${empty("Detailed statistics aren't available for this player yet.")}${tb}`;
   }
   // v35: a past match: score, statistics, goals and cards, lineups (ESPN, through the Worker)
-  async function pageResult(e, date) {
+  async function pageResult(e, date, tab) {
     let P = null;                                                     // v35: what Kwallo said before kickoff (from that day's results file)
     if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { try { P = ((await get(`days/${date}.json`)).matches || []).find(x => x.espn === e) || null; } catch (err) {} }
     setNav("today");
@@ -727,17 +777,32 @@
     const T = R.teams || [], H = T.find(t => t.side === "home") || T[0] || {}, A = T.find(t => t.side === "away") || T[1] || {};
     const bar = s => { const h = parseFloat(s.home), a = parseFloat(s.away), tot = h + a;
       return isFinite(h) && isFinite(a) && tot > 0 ? `<div class="bar mini" aria-hidden="true"><i class="h" style="flex-basis:${100 * h / tot}%"></i><i class="a" style="flex-basis:${100 * a / tot}%"></i></div>` : ""; };
-    app.innerHTML = `${backBar()}<section class="hero"><p class="meta">${esc(R.competition)}${R.date ? `, ${esc(longDate(R.date))}` : ""}${R.venue ? ` · ${esc(R.venue)}` : ""}</p>
-        <div class="mhead"><span></span><div class="mside"><b>${esc(H.name)}</b></div><div class="mcentre num"><b class="score">${esc(H.score ?? "–")}–${esc(A.score ?? "–")}</b>
-          <span class="muted">${esc(R.status || "")}</span></div><div class="mside"><b>${esc(A.name)}</b></div><span></span></div></section>
-      ${P && (P.pred || P.top) ? `<section class="scard kpred"><h3>Kwallo's prediction before kick-off</h3>
+    // v35: in tabs, like a match on today's list: Overview, Stats, Lineups (a tab only when it has something in it)
+    const ov = `${P && (P.pred || P.top) ? `<section class="scard kpred"><h3>Kwallo's prediction before kick-off</h3>
         ${P.pred ? `${chanceBar(P.pred, [H.name, A.name])}<div class="bar-legend num"><span><b>${pct(P.pred.pH)}</b>${esc(H.name)}</span><span><b>${pct(P.pred.pD)}</b>Draw</span><span style="text-align:right"><b>${pct(P.pred.pA)}</b>${esc(A.name)}</span></div>` : ""}
-        ${P.top ? `<p>Top angle: <b>${esc(P.top.bet)}</b>${P.top.p != null ? ` (${pct(P.top.p)})` : ""} ${P.top.won === true ? '<span class="won">✓ came in</span>' : P.top.won === false ? '<span class="lost">✗ missed</span>' : ""}</p>` : ""}</section>` : ""}
-      ${momentumCard(R, H.name, A.name)}${timelineCard(R, H.name, A.name)}
-      ${R.card ? `<h2>Match stats</h2>${statsCard(R.card, H.name, A.name, !R.completed)}`
-        : (R.stats || []).length ? `<h2>Match stats</h2><div class="wrap"><table class="mstats"><tbody>${R.stats.map(s => `<tr><td class="r num"><b>${esc(s.home)}</b></td><td class="c">${esc(s.label)}${bar(s)}</td><td class="num"><b>${esc(s.away)}</b></td></tr>`).join("")}</tbody></table></div>` : ""}
-      ${lineupsLive(R, H.name, A.name, slugify(H.name), slugify(A.name), {})}
+        ${P.top ? `<p>Top angle: <b>${esc(P.top.bet)}</b>${P.top.p != null ? ` (${pct(P.top.p)})` : ""} ${P.top.won === true ? '<span class="won">✓ came in</span>' : P.top.won === false ? '<span class="lost">✗ missed</span>' : ""}</p>` : ""}
+        ${P.pred && P.pred.scores ? likeliestBlock(P.pred.scores, H.score, A.score) : ""}</section>` : ""}
+      ${momentumCard(R, H.name, A.name)}${timelineCard(R, H.name, A.name)}`;
+    const stats = R.card ? `<h2>Match stats</h2>${statsCard(R.card, H.name, A.name, !R.completed)}`
+        : (R.stats || []).length ? `<h2>Match stats</h2><div class="wrap"><table class="mstats"><tbody>${R.stats.map(s => `<tr><td class="r num"><b>${esc(s.home)}</b></td><td class="c">${esc(s.label)}${bar(s)}</td><td class="num"><b>${esc(s.away)}</b></td></tr>`).join("")}</tbody></table></div>` : "";
+    const lineups = lineupsLive(R, H.name, A.name, slugify(H.name), slugify(A.name), {});
+    const panes = [["overview", "Overview", ov.trim() || empty("No timeline for this match.")], ["stats", "Stats", stats], ["lineups", "Lineups", lineups]].filter(x => x[2]);
+    tab = panes.some(([k]) => k === tab) ? tab : "overview";
+    const base = `#/result/${encodeURIComponent(e)}/${date || "-"}`;
+    const mb = { Home: H.name, Away: A.name, badges: { home: { c: H.color }, away: { c: A.color } } };
+    const xl = xgText(R.xg);
+    const sc = `<b>${esc(H.score ?? "–")}–${esc(A.score ?? "–")}</b> <span class="muted">${esc(R.completed ? "FT" : R.status || "")}</span>${xl ? `<small class="xgl">${xl}</small>` : ""}`;
+    app.innerHTML = `${backBar()}<section class="hero"><p class="meta">${esc(R.competition)}${R.date ? `, ${esc(longDate(R.date))}` : ""}${R.venue ? ` · ${esc(R.venue)}` : ""}</p>
+        <div class="mhead"><span></span><div class="mside">${badge(mb, "home")}<b>${esc(H.name)}</b></div><div class="mcentre num"><b class="score">${esc(H.score ?? "–")}–${esc(A.score ?? "–")}</b>
+          <span class="muted">${esc(R.status || "")}</span>${xl ? `<span class="xgl">${xl}</span>` : ""}</div><div class="mside">${badge(mb, "away")}<b>${esc(A.name)}</b></div><span></span></div></section>
+      <div id="tabanchor"></div>
+      <div class="mstick"><div class="minibar" aria-hidden="true">${badge(mb, "home")}<b class="mn">${esc(H.name)}</b><span class="ms num">${sc}</span><b class="mn r">${esc(A.name)}</b>${badge(mb, "away")}</div>
+        <nav class="mtabs" role="tablist">${panes.map(([k, l]) => `<a role="tab" data-k="${k}" href="${base}/${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}</a>`).join("")}</nav></div>
+      <div id="mroot" data-base="${esc(base)}" data-h="${esc(H.name)}" data-a="${esc(A.name)}">
+        ${panes.map(([k, , html]) => `<section class="section" data-tab="${k}" ${k === tab ? "" : "hidden"}>${html}</section>`).join("")}
+      </div>
       <p class="small muted">Match data from ESPN.</p>`;
+    afterRender = () => showTab(tab, false);
     hit("result");
   }
 
@@ -850,6 +915,12 @@
       ${(t.spotted || []).length ? `<ul class="list small">${t.spotted.slice(0, 5).map(s => `<li>${esc(typeof s === "string" ? s : (s.pattern ? `${s.pattern}: ${s.count} of the last ${s.of}${s.base != null ? `, league usually ${pct(s.base)}` : ""}` : JSON.stringify(s)))}</li>`).join("")}</ul>` : ""}`;
   }
   const POS = [["G", "Goalkeeper"], ["D", "Defenders"], ["M", "Midfielders"], ["F", "Forwards"]];
+  // v35: colour helpers for the pitch (team kits, readable numbers, rating chips)
+  const rgb = c => { const m = String(c || "").replace("#", "").match(/^([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i); return m ? m.slice(1).map(x => parseInt(x, 16)) : [111, 143, 132]; };
+  const lum = c => { const [r, g, b] = rgb(c); return (0.299 * r + 0.587 * g + 0.114 * b) / 255; };
+  const textOn = c => (lum(c) > 0.6 ? "#111111" : "#FFFFFF");
+  const colorDist = (a, b) => { const x = rgb(a), y = rgb(b); return Math.sqrt(x.reduce((s, v, i) => s + (v - y[i]) ** 2, 0)); };
+  const ratingColor = r => (r >= 7.5 ? "#3FB37F" : r >= 7 ? "#9FD36A" : r >= 6.5 ? "#E9C43B" : "#E98A3B");
   const posDepth = pos => { const c = String(pos || "").toUpperCase().trim(), b = c.split("-")[0];   // v35: how far forward a position plays
     if (["G", "GK"].includes(b)) return 0;
     if (["CB", "CD", "SW", "LCB", "RCB", "D", "DF"].includes(b)) return 1;
@@ -892,20 +963,26 @@
     const formation = g => g.label;
     const dots = (g, top, color, ts) => {
       const n = g.rows.length - 1, ys = [34, ...[...Array(n)].map((_, i) => n === 1 ? 160 : 90 + (i * (230 - 90)) / (n - 1))];
+      const ink = textOn(color);                                       // v35: shirt numbers readable on any kit colour
       return g.rows.map((row, r) => row.map((p, i, arr) => { const x = (W / (arr.length + 1)) * (i + 1), y = Math.round(top ? ys[r] : Hh - ys[r]), op = p.p != null ? Math.max(0.35, Math.min(1, p.p)) : 1;
         const sur = String(p.Player || "").split(" ").slice(-1)[0];
+        const inner = p.jersey ? `<text x="${x.toFixed(1)}" y="${y + 4}" text-anchor="middle" class="pj" style="fill:${ink}">${esc(p.jersey)}</text>`
+          : (p.p != null && p.p < 0.995 ? `<text x="${x.toFixed(1)}" y="${y + 4}" text-anchor="middle" class="pp" style="fill:${ink}">${Math.round(100 * p.p)}</text>` : "");
+        const rt = p.rating != null ? `<rect x="${(x + 6).toFixed(1)}" y="${y - 21}" width="25" height="13" rx="3" fill="${ratingColor(p.rating)}"/>
+          <text x="${(x + 18.5).toFixed(1)}" y="${y - 11.5}" text-anchor="middle" class="prt">${Number(p.rating).toFixed(1)}</text>` : "";
         return `<a href="${playerHref(ts, p.Player, p.id)}" aria-label="${esc(p.Player)}"><g opacity="${op.toFixed(2)}"><circle cx="${x.toFixed(1)}" cy="${y}" r="13" fill="${color}" stroke="#fff" stroke-width="1.5"/>
-          <text x="${x.toFixed(1)}" y="${y + 27}" text-anchor="middle" class="pn">${esc(sur.slice(0, 12))}</text>
-          ${p.p != null && p.p < 0.995 ? `<text x="${x.toFixed(1)}" y="${y + 4}" text-anchor="middle" class="pp">${Math.round(100 * p.p)}</text>` : ""}</g></a>`; }).join("")).join("");
+          <text x="${x.toFixed(1)}" y="${y + 27}" text-anchor="middle" class="pn">${esc(sur.slice(0, 12))}</text>${inner}${rt}</g></a>`; }).join("")).join("");
     };
     const gh = lines(home, false), ga = lines(away, true);
+    cHome = cHome || "#2E8F6A"; cAway = cAway || "#6F8F84";
+    if (colorDist(cHome, cAway) < 90) cAway = lum(cHome) > 0.5 ? "#1B2A26" : "#EEF2EF";   // v35: two similar kits: the away side in a contrasting colour
     return `<figure class="pitchfig"><figcaption class="small"><span><b>${esc(A)}</b> ${formation(ga) ? `(${formation(ga)})` : ""}</span></figcaption>
       <svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Lineups on the pitch: ${esc(H)} ${formation(gh)}, ${esc(A)} ${formation(ga)}">
         <rect x="1" y="1" width="${W - 2}" height="${Hh - 2}" rx="10" class="turf"/>
         <g class="lines" fill="none"><line x1="1" y1="${Hh / 2}" x2="${W - 1}" y2="${Hh / 2}"/><circle cx="${W / 2}" cy="${Hh / 2}" r="42"/>
           <rect x="${W / 2 - 80}" y="1" width="160" height="62"/><rect x="${W / 2 - 80}" y="${Hh - 63}" width="160" height="62"/>
           <rect x="${W / 2 - 34}" y="1" width="68" height="22"/><rect x="${W / 2 - 34}" y="${Hh - 23}" width="68" height="22"/></g>
-        ${dots(ga, true, cAway || "#6F8F84", as)}${dots(gh, false, cHome || "#2E8F6A", hs)}
+        ${dots(ga, true, cAway, as)}${dots(gh, false, cHome, hs)}
       </svg><figcaption class="small"><span><b>${esc(H)}</b> ${formation(gh) ? `(${formation(gh)})` : ""}</span></figcaption></figure>`;
   }
   function xiByPosition(e, ts) {
@@ -966,7 +1043,7 @@
         case "team": await pageTeam(parts[1]); break;
         case "player": await pagePlayer(parts[1], parts[2]); break;
         case "pf": await pageFindPlayer(parts[1], parts[2], parts[3]); break;          // v35
-        case "result": await pageResult(parts[1], parts[2]); break;                    // v35 (date: to show Kwallo's prediction)
+        case "result": await pageResult(parts[1], parts[2], parts[3]); break;          // v35 (date: to show Kwallo's prediction; then the tab)
         case "angles": await pageAngles(); break;
         case "acca": pageAcca(); break;
         case "track": await pageTrack(); break;
@@ -982,12 +1059,15 @@
       app = shell;
       const hdr1 = document.querySelector("header.top"); if (hdr1) document.documentElement.style.setProperty("--hdr", hdr1.offsetHeight + "px");   // v35
       onScrollPin();
-      if (afterRender) { const f = afterRender; afterRender = null; try { f(); } catch (e) {} } }
+      if (afterRender) { const f = afterRender; afterRender = null; try { f(); } catch (e) {} }
+      if (slideFrom) { slideIn(shell.querySelector(".swipez"), slideFrom); slideFrom = 0; } }   // after a date swipe, the new day slides in
     app = shell;
   }
 
   // ---------- one listener for every button
   document.addEventListener("click", ev => {
+    const dp = ev.target.closest("[data-datepick]");                 // v35: the 📅 opens the date picker
+    if (dp && dp.showPicker) { try { dp.showPicker(); } catch (e) {} return; }
     const tabA = ev.target.closest(".mtabs a[data-k]");               // v35: match tabs switch in place
     if (tabA && !ev.metaKey && !ev.ctrlKey) { ev.preventDefault(); showTab(tabA.dataset.k, true); return; }
     const ps = ev.target.closest("th[data-psort]");                  // v35: sort a team's players
@@ -1049,28 +1129,79 @@
     s.defer = true; s.src = "https://static.cloudflareinsights.com/beacon.min.js"; s.setAttribute("data-cf-beacon", JSON.stringify({ token: C.cfAnalyticsToken }));
     document.head.appendChild(s);
   }
-  // ---------- v35: swipes. From the middle of the screen: the next / previous match tab. From the screen's edge: back to today's matches.
-  // Tables that scroll sideways keep their own swipe. (On phones the browser's own edge-swipe "back" may come first.)
+  // ---------- v35: swipes. On Today and the day pages the matches follow your finger to the next or previous date; on a match page,
+  // to the next or previous tab. Let go past a third of the screen (or flick) and it slides on; let go early and it springs back.
+  // From the screen's edge: back to today's matches. Tables that scroll sideways keep their own swipe.
   (function swipes() {
-    let sx = 0, sy = 0, st = 0, edge = false, ok = false;
+    let sx = 0, sy = 0, st = 0, edge = false, ok = false, mode = null, lock = null, el = null, next = null;
     const scrollsX = el => { for (; el && el !== document.body; el = el.parentElement) {
       if (el.scrollWidth > el.clientWidth + 4 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return true; } return false; };
+    const target = dir => {                                           // what a swipe this way leads to (null: nothing there)
+      if (mode === "day") {
+        const dr = shell.querySelector("#dayroot"), dd = new Date(dr.dataset.day + "T12:00:00"); dd.setDate(dd.getDate() + dir);
+        const nd = localDay(dd);
+        return nd >= PAST_FROM && nd <= dr.dataset.max ? { dir, day: nd, hash: `#/day/${nd}/${dr.dataset.filter || "all"}` } : null;
+      }
+      const tabs = [...shell.querySelectorAll(".mtabs a[data-k]")], cur = tabs.findIndex(a => a.classList.contains("on")), nx = cur + dir;
+      return cur >= 0 && nx >= 0 && nx < tabs.length ? { dir, key: tabs[nx].dataset.k } : null;
+    };
+    const back = () => { if (!el) return; el.style.transition = "transform .2s ease, opacity .2s ease"; el.style.transform = ""; el.style.opacity = ""; };
     document.addEventListener("touchstart", e => {
+      lock = null; el = null; next = null;
       if (e.touches.length !== 1) { ok = false; return; }
       const t = e.touches[0]; sx = t.clientX; sy = t.clientY; st = Date.now();
       edge = sx < 28 || sx > window.innerWidth - 28; ok = edge || !scrollsX(e.target);
+      mode = shell.querySelector("#dayroot") ? "day" : shell.querySelector(".mtabs") ? "tab" : null;
     }, { passive: true });
+    document.addEventListener("touchmove", e => {
+      if (!ok || edge || !mode || lock === "y") return;
+      const t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+      if (!lock) {                                                    // decide once: sideways (swipe) or up and down (scroll)
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+        lock = Math.abs(dx) > 1.2 * Math.abs(dy) ? "x" : "y";
+        if (lock === "y") return;
+        el = shell.querySelector(mode === "day" ? ".swipez" : "#mroot");
+        if (el) el.style.transition = "none";
+      }
+      if (!el) return;
+      if (e.cancelable) e.preventDefault();
+      const dir = dx < 0 ? 1 : -1;                                    // finger moving left: the next day or tab
+      if (!next || next.dir !== dir) {                                // start loading what's that way while the finger is still down
+        next = target(dir);
+        if (next && next.day) warmDay(next.day);
+        if (next && next.key) loadPane(next.key);
+      }
+      const pull = next ? dx : dx * 0.25;                             // nothing that way: it only gives a little
+      el.style.transform = `translateX(${pull}px)`;
+      el.style.opacity = String(1 - Math.min(Math.abs(pull) / window.innerWidth, 1) * 0.5);
+    }, { passive: false });
     document.addEventListener("touchend", e => {
       if (!ok) return; ok = false;
-      const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
-      if (Date.now() - st > 700 || Math.abs(dx) < 70 || Math.abs(dx) < 1.6 * Math.abs(dy)) return;
-      const h = location.hash || "#/";
-      if (edge) { if (h !== "#/") { hit("swipe_home"); location.hash = "#/"; } return; }
-      if (!/^#\/match\//.test(h)) return;
-      const tabs = [...shell.querySelectorAll(".mtabs a[data-k]")];          // v35: counted from the tab on screen
-      const cur = tabs.findIndex(a => a.classList.contains("on")), nx = cur + (dx < 0 ? 1 : -1);
-      if (cur >= 0 && nx >= 0 && nx < tabs.length) { hit("swipe_tab"); showTab(tabs[nx].dataset.k, true); }
+      const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
+      if (edge) {
+        if (dt <= 700 && Math.abs(dx) >= 70 && Math.abs(dx) >= 1.6 * Math.abs(dy) && (location.hash || "#/") !== "#/") { hit("swipe_home"); location.hash = "#/"; }
+        return;
+      }
+      if (lock !== "x" || !el) return;
+      const w = window.innerWidth, flick = Math.abs(dx) > 40 && Math.abs(dx) / Math.max(dt, 1) > 0.5;
+      const n = next && (dx < 0 ? 1 : -1) === next.dir ? next : null;
+      if (!n || !(Math.abs(dx) > w / 3 || flick)) { back(); return; }
+      const box = el;
+      box.style.transition = "transform .16s ease-in, opacity .16s ease-in";
+      box.style.transform = `translateX(${-n.dir * w}px)`; box.style.opacity = "0";
+      setTimeout(() => {
+        if (n.day) {                                                  // the next day comes in from the side the finger moved away from
+          hit("swipe_day"); slideFrom = n.dir;
+          const bar = shell.querySelector("[data-daytabs]"); dayBarX = bar ? bar.scrollLeft : null;
+          location.hash = n.hash;
+        } else {
+          hit("swipe_tab"); showTab(n.key, true);
+          box.style.transition = "none"; box.style.transform = ""; box.style.opacity = "";
+          slideIn(box, n.dir);
+        }
+      }, 160);
     }, { passive: true });
+    document.addEventListener("touchcancel", () => { ok = false; if (lock === "x") back(); }, { passive: true });
   })();
   window.addEventListener("hashchange", route);
   setInterval(async () => {

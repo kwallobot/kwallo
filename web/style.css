@@ -10,8 +10,9 @@
           --home: #94E0C2; --draw: #6F8F84; --away: #E9F2EE; --brand: #94E0C2; --warn: #E3AE55; --good: #94E0C2; --bad: #E58C80; }
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 400 16px/1.5 var(--font); font-stretch: 100%; padding-bottom: 72px; }
+html { -webkit-text-size-adjust: 100%; font-size: 87.5%; }     /* v35: 14px text (from 16px); everything sized in rem follows */
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 1rem/1.5 var(--font); font-stretch: 100%; padding-bottom: 72px; }
+input, select, textarea { font-size: 16px !important; }       /* iPhones zoom the page into boxes with smaller text */
 a { color: inherit; }
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
 h1, h2, h3 { font-stretch: 75%; font-weight: 700; line-height: 1.1; margin: 0 0 .4em; letter-spacing: -.01em; }
@@ -264,7 +265,8 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .daybar { display: flex; align-items: center; gap: .5rem; }
 .daybar .tabs { flex: 1; min-width: 0; margin: .4rem 0 .6rem; }
 .datepick { flex: none; display: inline-flex; align-items: center; gap: .2rem; border: 1px solid var(--line); border-radius: 999px; padding: .2rem .5rem; cursor: pointer; }
-.datepick input { border: 0; background: transparent; color: var(--ink); font: 600 .85rem var(--font); width: 7.6rem; color-scheme: light dark; }
+.datepick { position: relative; padding: .35rem .6rem; }       /* just the 📅: the date box lies invisibly on top, so a tap opens the picker */
+.datepick input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; cursor: pointer; color-scheme: light dark; }
 .kpred .bar { margin-left: 0; }
 .kpred .bar-legend { margin-left: 0; color: var(--ink); }
 .kpred .bar-legend span b { display: block; font-size: 1.2rem; }
@@ -284,3 +286,17 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .minibar .ms { flex: none; text-align: center; font-size: 1.05rem; }
 .minibar .ms .live { color: var(--warn); font-weight: 700; font-size: .85rem; }
 .minibar .ms .muted { font-size: .85rem; }
+/* v35: likeliest scores with the hit marked; rating chips and shirt numbers on the pitch */
+.scores .sc.hit b { color: var(--good); text-decoration: underline; text-underline-offset: 3px; }
+.pitchfig .pj { font: 800 11px var(--font); font-stretch: 80%; }
+.pitchfig .prt { font: 800 9.5px var(--font); fill: #111; }
+/* v35: smooth swipes between dates and tabs: the page leaves sideways moves to the site (up-and-down scrolling and zoom stay the browser's),
+   and the content sliding off-screen doesn't widen the page */
+#app { touch-action: pan-y pinch-zoom; overflow-x: clip; }
+/* v35: xG under the score (big scoreboard and the slim pinned one) */
+.xgl { display: block; font-size: .8rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.xgl:empty { display: none; }
+.xgl small { font-weight: 500; opacity: .8; }
+.mhead .xgl { color: #B9CEC5; margin-top: .15rem; }
+.minibar .ms .xgl { font-size: .72rem; line-height: 1.1; }
+.wrap, .tabs, .mtabs { touch-action: auto; }

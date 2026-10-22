@@ -85,6 +85,20 @@ def _rounds(cur, upcoming, slug):
 PAST_FROM = "2025-07-01"
 
 
+def _likeliest(pH, pD, pA, eh, ea, n=5):
+    """v35: the model's five likeliest scorelines before kickoff, rebuilt from the logged expected goals and chances (the same score
+    grid as the match page: independent Poisson goals, rescaled so home wins / draws / away wins match the logged chances)."""
+    if not all(pd.notna(x) for x in (pH, pD, pA, eh, ea)) or eh <= 0 or ea <= 0:
+        return None
+    from scipy.stats import poisson
+    g = np.outer(poisson.pmf(range(9), eh), poisson.pmf(range(9), ea))
+    home, draw, away = np.tril(g, -1), np.diag(np.diag(g)), np.triu(g, 1)
+    g = home / home.sum() * pH + draw / draw.sum() * pD + away / away.sum() * pA
+    g = g / g.sum()
+    top = np.argsort(g.ravel())[::-1][:n]
+    return [[int(i // g.shape[1]), int(i % g.shape[1]), round(float(g.ravel()[i]), 4)] for i in top]
+
+
 def _past_days(ns, data_dir, write, slug, clean, comp_names):
     """v35: one file per date since PAST_FROM with every result in our competitions, and what Kwallo predicted before kickoff
     (the logged chances, and the top angle with won / lost). Only files whose contents changed are uploaded."""
@@ -98,8 +112,11 @@ def _past_days(ns, data_dir, write, slug, clean, comp_names):
     pred, top = {}, {}
     pl_p = os.path.join(data_dir, "prediction_log.csv")
     if os.path.exists(pl_p):
-        pl = pd.read_csv(pl_p, usecols=lambda c: c in ("Competition", "Date", "Home", "Away", "pH", "pD", "pA"))
-        pred = {key(x.Competition, x.Date, x.Home, x.Away): (x.pH, x.pD, x.pA) for x in pl.itertuples()}
+        pl = pd.read_csv(pl_p, usecols=lambda c: c in ("Competition", "Date", "Home", "Away", "pH", "pD", "pA", "ExpHome", "ExpAway"))
+        for c in ("ExpHome", "ExpAway"):
+            if c not in pl:
+                pl[c] = np.nan
+        pred = {key(x.Competition, x.Date, x.Home, x.Away): (x.pH, x.pD, x.pA, x.ExpHome, x.ExpAway) for x in pl.itertuples()}
     vl_p = os.path.join(data_dir, "verdict_log.csv")
     if os.path.exists(vl_p):
         vl = pd.read_csv(vl_p, usecols=lambda c: c in ("Competition", "Date", "Home", "Away", "kind", "Bet", "p", "won"))
@@ -114,7 +131,7 @@ def _past_days(ns, data_dir, write, slug, clean, comp_names):
             rows.append({"competition": x.Comp, "league_slug": slug(x.Comp), "home": x.HomeTeam, "away": x.AwayTeam,
                          "home_slug": slug(x.HomeTeam), "away_slug": slug(x.AwayTeam), "hs": int(x.FTHG), "as": int(x.FTAG),
                          "espn": x.espn if isinstance(getattr(x, "espn", None), str) and ":" in x.espn else None,
-                         "pred": {"pH": p[0], "pD": p[1], "pA": p[2]} if p and pd.notna(p[0]) else None, "top": top.get(k)})
+                         "pred": {"pH": p[0], "pD": p[1], "pA": p[2], "scores": _likeliest(*p)} if p and pd.notna(p[0]) else None, "top": top.get(k)})
         n += write(f"site/days/{d}.json", clean({"date": d, "matches": rows}))
         dates.append(d)
     n += write("site/days/index.json", {"from": PAST_FROM, "dates": dates})
