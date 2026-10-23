@@ -23,6 +23,7 @@ QUICK = {   # settings switched for the quicker runs (exact text replacements in
     "PITCHAPI_RUN_MINUTES = 10": "PITCHAPI_RUN_MINUTES = 2",
     "PITCHAPI_TACTICS_MINUTES = 10": "PITCHAPI_TACTICS_MINUTES = 2",
     "PITCHAPI_SHOTS_MINUTES = 5": "PITCHAPI_SHOTS_MINUTES = 1",
+    "PITCHAPI_HALVES_MINUTES = 15": "PITCHAPI_HALVES_MINUTES = 3",        # v37f
     "time.time() - t0 > 8 * 60": "time.time() - t0 > 1 * 60",
     "TS_BACKFILL_MINUTES = 8": "TS_BACKFILL_MINUTES = 3",                 # v35
     "NEWS_RUN_MINUTES = 6": "NEWS_RUN_MINUTES = 3",                       # v35

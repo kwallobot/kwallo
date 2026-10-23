@@ -2,6 +2,55 @@
 
 *Last updated: 23 October 2026 (v37d built: NBA box scores, quarters, plays, player pages, leaders; halves and quarters, rebound and assist props, live chances. v37c built: the league gate over three seasons, held leagues shown without chances, Matches / Games; v37b: NBA player ratings and the live record; v37: the NBA. v36 before it: the 22 leagues, the league gate, PlayerElo, the installable app and the live view).*
 
+### v37h (23 October 2026): better props, every quarter and half, tests that include this season
+- **The tests now include this season.** Props, quarters and live chances are tuned on last season before 1 February and judged on every game after it, this season's included. So the verdicts move week by week as games come in. (Before, they replayed last season only and couldn't change.) A `model.json` from before this change is re-tested on the next run of either kind (`tests_v`).
+- **Quarters and halves are tested two ways:** each half of the data is judged with settings fitted on the other half. That gives 1,240 games judged instead of about 550, so the verdicts are much less noisy. The published settings are fitted on all games.
+- **New:** 2nd, 3rd and 4th quarter winner and points, and the 2nd half winner and points (overtime included, as bookmakers settle it).
+
+  | Market | Result |
+  |---|---|
+  | All six periods' winners | passed |
+  | Points: both halves and Q1, Q3, Q4 | passed |
+  | Q2 points | not passed: no better than the simple guess |
+  | Highest-scoring quarter | not passed |
+
+- **Props:** each player's own game-to-game spread over his last 20 games, pulled towards the league's. A level-and-stretch correction of the expected figure (k × μ^β). For 3-pointers, a choice between per-minute rate and attempts × shooting % (pulled towards the league's % until ~150 attempts). A blend with the player's own record over his last 20 games. All of it is chosen on the tuning games.
+
+  | Prop | Result |
+  |---|---|
+  | Rebounds | passed (0.672 vs 0.694, 0.011 out) |
+  | Assists | passed (0.663 vs 0.692, 0.013 out) |
+  | 3-pointers | **now passed** (0.624 vs 0.627, 0.010 out): attempts × %, 10% own record |
+  | Points | still not passed: 0.683 vs 0.702, but 0.028 out on calibration (limit 0.02) |
+
+- **Website:** the Markets tab shows every half and quarter that passed. Player props get a "3-pointers made" button.
+
+### v37g (23 October 2026): player props switch
+- NBA player props now show one statistic at a time, with a Rebounds | Assists switch (points and 3-pointers get buttons when they pass their test). The last choice is remembered on the device. Before, assists sat below a long rebounds list and looked missing.
+
+### v37f (23 October 2026): football markets by half, and passes
+- **New markets**, over or under the league's usual line, each with the same weekly calibration test as the other markets (trusted or experimental):
+
+  | Statistic | By half | Split |
+  |---|---|---|
+  | Shots | 1st and 2nd | total, home, away |
+  | Shots on target | 1st and 2nd | total, home, away |
+  | Corners | 1st and 2nd | total, home, away |
+  | Passes | 1st and 2nd | total, home, away |
+  | Fouls | 1st and 2nd | total |
+  | Passes, full match | – | total, home, away |
+
+  They cover every league with PitchAPI statistics (section 8c, part 1b, `team_stat_markets`), and a league needs 300+ matches with the figure. They appear in Goals & more under **Halves**; full-match passes appear with the other markets.
+- **Data:**
+  - PitchAPI's statistics come split into 1st and 2nd half; they're now kept (`stats_h` in `pitchapi_tactics.csv`, `pv` 3).
+  - Matches stored earlier are re-read for their halves, stats page only, 8 at a time (PitchAPI has no limit), newest first. That's 15 minutes in the weekly run and 3 in daily runs (`PITCHAPI_HALVES_MINUTES`).
+  - Until a match has its half figures, its shots and shots on target by half are counted from the shot-by-shot data. A shot is on target when it has an xG-on-target value. A shot in 1st-half stoppage time counts in the 2nd half, a small error.
+  - Corners, fouls and passes by half need the re-read figures, so they switch on as the data fills in.
+- Tested on made-up data in the browser: half figures taken from PitchAPI's halves or counted from shots, every market tested once there's enough data, and fouls by half offered as the total only.
+
+### v37e (23 October 2026): reload goes to today
+- Reloading a date page (`#/day/...` or `#/bb/day/...`) now opens today's matches or games. A link to a date still opens that date, and swipes and the back button are unchanged. Before this, the chosen date stayed in the address, so a reload kept it.
+
 ### v37d, as built (23 October 2026): NBA stats pages, halves and quarters, player props, live chances
 - **Worker** `/api/bbgame?id=`: ESPN's game page, trimmed, with:
   - the status, the score by quarter, team statistics and every player's box-score line

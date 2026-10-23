@@ -101,7 +101,7 @@ def main():
         cfg_p, gate_p = os.path.join(DATA, "model.json"), os.path.join(DATA, "gate.json")
         cfg = json.load(open(cfg_p)) if os.path.exists(cfg_p) else None
         gate = json.load(open(gate_p)) if os.path.exists(gate_p) else {"pass": False, "why": "not tested yet"}
-        bt = None
+        bt, cur = None, None
         if MODE == "full" or cfg is None:
             print("Weekly test: replaying last season, testing each adjustment...")
             cfg, bt = nba.choose(ge, odds, today)
@@ -124,16 +124,27 @@ def main():
             print(f"  GATE: {'PASSED' if gate['pass'] else 'not passed'} ({gate['why']}); " + ", ".join(f"{k} {v}" for k, v in gate.items() if k not in ("pass", "why", "this_season")))
         # ---- v37d: the tests for halves and quarters, player props and live chances (weekly; also the first run after they were added,
         #      using the stored replay of last season)
+        #      v37h: these tests now include this season's games (so their verdicts move week by week); a model.json from before that
+        #      change is re-tested on the next run of either kind
+        TESTS_V = "37h"
         rp_ = os.path.join(DATA, "replay.csv")
-        if bt is None and "props" not in cfg and os.path.exists(rp_):
+        stale = cfg.get("tests_v") != TESTS_V
+        if bt is None and stale and os.path.exists(rp_):
             bt = pd.read_csv(rp_, dtype={"game_id": str}, parse_dates=["date"])
-        if bt is not None and len(bt) and (MODE == "full" or "props" not in cfg):
-            print("Weekly test: halves and quarters, player props, live chances...")
+        if bt is not None and len(bt) and (MODE == "full" or stale):
+            print("Weekly test: halves and quarters, player props, live chances (last season and this season so far)...")
             last = season - 1
+            if cur is None:
+                cur = nba.walk(ge, cfg, pd.Timestamp(f"{season - 1}-10-25"), today)
+            bt_all = pd.concat([bt, cur], ignore_index=True) if cur is not None and len(cur) else bt
             pq = nba.update_past_quarters(DATA, last, minutes=10)
-            cfg["quarters"] = nba.quarter_fit(bt, pq)
-            cfg["live"] = nba.live_fit(bt, pq, cfg["sd_margin"])
-            cfg["props"] = nba.prop_fit(ptp, pd.Timestamp(f"{last - 1}-11-01"), pd.Timestamp(f"{last}-04-20"))
+            sq = sg[["game_id", "home_q", "away_q"]].copy() if "home_q" in sg else pd.DataFrame(columns=["game_id", "home_q", "away_q"])
+            sq = sq[sq["home_q"].astype(str).str.contains(",", na=False)]
+            pq_all = pd.concat([pq, sq], ignore_index=True).drop_duplicates("game_id", keep="last")
+            cfg["quarters"] = nba.quarter_fit(bt_all, pq_all)
+            cfg["live"] = nba.live_fit(bt_all, pq_all, cfg["sd_margin"])
+            cfg["props"] = nba.prop_fit(ptp, pd.Timestamp(f"{last - 1}-11-01"), today, split=pd.Timestamp(f"{last}-02-01"))
+            cfg["tests_v"] = TESTS_V
             json.dump(cfg, open(cfg_p, "w"), indent=1)
 
         # ---- v37b: the live record (real pre-game predictions against the bookmakers) also decides, every run

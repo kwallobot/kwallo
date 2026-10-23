@@ -1,7 +1,7 @@
 // Kwallo service worker (v36): makes the site installable and lets it open without a connection, showing the last matches
 // it loaded. Everything is fetched fresh when there's a connection (network first); the saved copies are only the fallback.
 // A new version of this file takes over the next time the app is opened (the old saved copies are then cleared).
-const VERSION = "kwallo-v37d-1";
+const VERSION = "kwallo-v37f-1";
 const SHELL = `shell-${VERSION}`, DATA = "data-v1", FONTS = "fonts-v1";
 const SHELL_FILES = ["/", "/app.js", "/style.css", "/config.js", "/logo.svg", "/icon-192.png", "/manifest.webmanifest"];   // ("/index.html" redirects to "/")
 const DATA_MAX = 200;                                            // saved data files kept (oldest dropped first)

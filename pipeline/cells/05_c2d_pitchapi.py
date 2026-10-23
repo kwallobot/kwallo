@@ -39,6 +39,7 @@ PA_TACTIC_LEAGUES = {"Premier League": ("ENG", "Premier League"), "La Liga": ("E
                      "Serie A": ("ITA", "Serie A"), "Ligue 1": ("FRA", "Ligue 1")}
 PITCHAPI_TACTICS_MINUTES = 10  # time limit per run for formations and match statistics (set 0 to skip)
 PITCHAPI_SHOTS_MINUTES = 5     # time limit per run for shot-by-shot data (set 0 to skip)
+PITCHAPI_HALVES_MINUTES = 15   # v37f: time limit per run for the half-by-half figures of matches stored earlier (set 0 to skip)
 PITCHAPI_PLAYERS_MINUTES = 6   # v30: time limit per run for every player's match statistics (tackles etc.; set 0 to skip)
 
 def _secret(name):
@@ -330,8 +331,25 @@ if PA_KEY:
 
         # ---- (c) tactics: formations and every match statistic, for our leagues (v22) ----
         TAP = f"{SAVE_DIR}/pitchapi_tactics.csv"
-        ptac = checked_read(TAP, text=("id", "f_home", "f_away", "stats", "pv"), name="pitchapi_tactics")
-        have_t = set(ptac.loc[ptac.get("pv", pd.Series(dtype=str)).astype(str) == "2", "id"].astype(str)) if len(ptac) and "pv" in ptac else set()   # v23: re-fetch older rows
+        ptac = checked_read(TAP, text=("id", "f_home", "f_away", "stats", "pv", "stats_h"), name="pitchapi_tactics")
+        have_t = set(ptac.loc[ptac.get("pv", pd.Series(dtype=str)).astype(str).isin(["2", "3"]), "id"].astype(str)) if len(ptac) and "pv" in ptac else set()   # v23: re-fetch older rows
+        def _halves(st_):
+            """v37f: each statistic for the 1st and 2nd half ({"1": {key: [home, away]}, "2": {...}}), from PitchAPI's periods."""
+            out_ = {}
+            for per in (st_.get("periods") or []):
+                nm_ = str(per.get("period") or "")
+                h_k = "1" if re.search(r"first|1st|^1$|^1h", nm_, re.I) else "2" if re.search(r"second|2nd|^2$|^2h", nm_, re.I) else None
+                if not h_k:
+                    continue
+                vals_ = {}
+                for grp_ in (per.get("groups") or []):
+                    for it in (grp_.get("items") or []):
+                        lead_ = lambda v_: pd.to_numeric((re.match(r"\s*(-?[0-9.]+)", str(v_)) or [None, None])[1], errors="coerce")
+                        h_, a_ = lead_(it.get("home")), lead_(it.get("away"))
+                        if pd.notna(h_) and pd.notna(a_):
+                            vals_[str(it.get("key"))] = [float(h_), float(a_)]
+                out_[h_k] = vals_
+            return out_
         tac_leagues = [f"{c}:{n}" for c, n in list(PA_XG_LEAGUES.values()) + list(PA_TACTIC_LEAGUES.values())] + list(PA_CUP_TACTICS)   # v35: + European cups
         todo_t = pcache[pcache["league"].isin(tac_leagues) & (pcache["status"] == "finished") & ~pcache["id"].astype(str).isin(have_t)].sort_values("date", ascending=False)
         t1, got_t = time.time(), []
@@ -350,13 +368,36 @@ if PA_KEY:
                         h_, a_ = lead_(it.get("home")), lead_(it.get("away"))
                         if pd.notna(h_) and pd.notna(a_):
                             vals[str(it.get("key"))] = [float(h_), float(a_)]
-            got_t.append({"id": str(r_.id), "f_home": (lu_t.get("home") or {}).get("formation"), "f_away": (lu_t.get("away") or {}).get("formation"), "stats": json.dumps(vals), "pv": "2"})
+            got_t.append({"id": str(r_.id), "f_home": (lu_t.get("home") or {}).get("formation"), "f_away": (lu_t.get("away") or {}).get("formation"), "stats": json.dumps(vals),
+                          "stats_h": json.dumps(_halves(st_)), "pv": "3"})
             time.sleep(0.1)
         if got_t:
             ptac = pd.concat([ptac, pd.DataFrame(got_t)], ignore_index=True).drop_duplicates("id", keep="last")
             ptac.to_csv(TAP, index=False)
         print(f"PitchAPI tactics: {len(ptac)} matches with formations and statistics ({len(got_t)} added this run, {max(0, len(todo_t) - len(got_t))} to go).")
-        PA_TACTICS = ptac.merge(pcache[["id", "league", "label", "date", "home", "away"]], on="id", how="inner") if len(ptac) else pd.DataFrame()
+        # v37f: the 1st- and 2nd-half figures for matches stored before they were kept: the stats page only (formations are already
+        #       there), 8 at a time (PitchAPI has no request limit), newest first, time-limited; the rest continue next run
+        if PITCHAPI_HALVES_MINUTES > 0 and len(ptac):
+            if "stats_h" not in ptac:
+                ptac["stats_h"] = np.nan
+            old_h = ptac[ptac["pv"].astype(str) != "3"].merge(pcache[["id", "date"]].assign(id=lambda d: d["id"].astype(str)), on="id", how="left").sort_values("date", ascending=False)
+            from concurrent.futures import ThreadPoolExecutor
+            t3, done_h, ids_ = time.time(), {}, list(old_h["id"].astype(str))
+            with ThreadPoolExecutor(max_workers=8) as ex_:
+                for i0 in range(0, len(ids_), 64):
+                    if time.time() - t3 > PITCHAPI_HALVES_MINUTES * 60:
+                        break
+                    chunk = ids_[i0:i0 + 64]
+                    for mid_, st_ in zip(chunk, ex_.map(lambda m_: pa(f"/v1/matches/{m_}/stats") or {}, chunk)):
+                        if st_:
+                            done_h[mid_] = json.dumps(_halves(st_))
+            if done_h:
+                sel_ = ptac["id"].astype(str).isin(done_h)
+                ptac.loc[sel_, "stats_h"] = ptac.loc[sel_, "id"].astype(str).map(done_h)
+                ptac.loc[sel_, "pv"] = "3"
+                ptac.to_csv(TAP, index=False)
+            print(f"PitchAPI half-by-half statistics: {len(done_h)} older matches added this run, {max(0, len(ids_) - len(done_h))} to go.")
+        PA_TACTICS = ptac.merge(pcache[[c_ for c_ in ("id", "league", "label", "date", "home", "away", "home_id", "away_id") if c_ in pcache]], on="id", how="inner") if len(ptac) else pd.DataFrame()
         # ---- (d) shot-by-shot data (v24): every shot with its minute, xG, xG on target, situation, body part and location ----
         SHP = f"{SAVE_DIR}/pitchapi_shots.csv"
         shot_done = set(checked_read(SHP, text=("match_id",), name="pitchapi_shots")["match_id"].astype(str)) if os.path.exists(SHP) else set()

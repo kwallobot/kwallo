@@ -782,42 +782,64 @@ def prop_table(pl, g, decay=0.95, prior_min=150.0):
     dates = g.set_index("game_id")["date"]
     p = pl[pl["game_id"].isin(dates.index)].assign(date=lambda x: x["game_id"].map(dates)).sort_values(["athlete_id", "date"]).reset_index(drop=True)
     stats = list(PROP_STATS)
-    lg = {s: float(p[s].fillna(0).sum() / p["min"].sum()) for s in stats}
-    vals = {s: p[s].fillna(0).values.astype(float) for s in stats}
+    track = stats + ["fg3a"]                                     # v37h: 3-point attempts too (threes as attempts x shooting %)
+    lg = {s: float(p[s].fillna(0).sum() / p["min"].sum()) for s in track}
+    lg_pct3 = float(p["fg3"].fillna(0).sum() / max(p["fg3a"].fillna(0).sum(), 1))
+    A0 = 150.0                                                   # 3-point % pulled towards the league's until ~150 attempts
+    vals = {s: p[s].fillna(0).values.astype(float) for s in track}
     mins, aid = p["min"].values.astype(float), p["athlete_id"].values
-    rate = {s: np.empty(len(p)) for s in stats}
+    rate = {s: np.empty(len(p)) for s in track}
+    pct3 = np.empty(len(p))
     avg20 = {s: np.full(len(p), np.nan) for s in stats}
     nov20 = {s: np.full(len(p), np.nan) for s in stats}         # how often he went over his own 20-game average line (shrunk to 50%)
+    phi20 = {s: np.full(len(p), np.nan) for s in stats}         # v37h: his own game-to-game spread (extra variance over a Poisson count)
+    last20 = {s: np.full((len(p), 20), np.nan, dtype=np.float32) for s in stats}   # v37h: his last 20 figures (his own record at any line)
     em, nprev = np.empty(len(p)), np.zeros(len(p))
     hist = {s: [] for s in stats}
-    S = {s: 0.0 for s in stats}; sm = 0.0; e = None; prev = None; n = 0
+    S = {s: 0.0 for s in track}; sm = 0.0; e = None; prev = None; n = 0
     now = {}
+    def phi_of(h_):
+        if len(h_) < 3:
+            return np.nan
+        m_, v_ = float(np.mean(h_)), float(np.var(h_, ddof=1))
+        return max(0.0, (v_ - m_) / m_ ** 2) if m_ > 0 else np.nan
     def snap():
-        return {**{s: (S[s] + lg[s] * prior_min) / (sm + prior_min) for s in stats}, "em": e, "n": n}
+        return {**{s: (S[s] + lg[s] * prior_min) / (sm + prior_min) for s in track}, "em": e, "n": n,
+                "pct3": (S["fg3"] + lg_pct3 * A0) / (S["fg3a"] + A0), **{f"phi_{s}": phi_of(hist[s][-20:]) for s in stats},
+                "n20": min(n, 20), **{f"h20_{s}": [float(v) for v in hist[s][-20:]] for s in stats}}
     for i in range(len(p)):
         if aid[i] != prev:
             if prev is not None:
                 now[prev] = snap()
-            S = {s: 0.0 for s in stats}; sm = 0.0; e = None; prev = aid[i]; n = 0; hist = {s: [] for s in stats}
-        for s in stats:
+            S = {s: 0.0 for s in track}; sm = 0.0; e = None; prev = aid[i]; n = 0; hist = {s: [] for s in stats}
+        for s in track:
             rate[s][i] = (S[s] + lg[s] * prior_min) / (sm + prior_min)
+        pct3[i] = (S["fg3"] + lg_pct3 * A0) / (S["fg3a"] + A0)
+        for s in stats:
             if hist[s]:
                 h20 = hist[s][-20:]
                 avg20[s][i] = a_ = float(np.mean(h20))
                 ln_ = math.floor(a_) + 0.5
                 nov20[s][i] = (sum(v > ln_ for v in h20) + 1) / (len(h20) + 2)
+                phi20[s][i] = phi_of(h20)
+                last20[s][i, :len(h20)] = h20
         em[i] = e if e is not None else 15.0
         nprev[i] = n
+        for s in track:
+            S[s] = decay * S[s] + vals[s][i]
         for s in stats:
-            S[s] = decay * S[s] + vals[s][i]; hist[s].append(vals[s][i])
+            hist[s].append(vals[s][i])
         sm = decay * sm + mins[i]
         e = mins[i] if e is None else 0.75 * e + 0.25 * mins[i]
         n += 1
     if prev is not None:
         now[prev] = snap()
     for s in stats:
-        p[f"rate_{s}"], p[f"avg20_{s}"], p[f"nov20_{s}"] = rate[s], avg20[s], nov20[s]
+        p[f"rate_{s}"], p[f"avg20_{s}"], p[f"nov20_{s}"], p[f"phi_{s}"] = rate[s], avg20[s], nov20[s], phi20[s]
+    p["rate_fg3a"], p["pct3"] = rate["fg3a"], pct3
     p["em"], p["nprev"] = em, nprev
+    p["row_i"] = np.arange(len(p))
+    p.attrs["last20"] = last20                                   # (rows found by row_i; kept out of the columns)
     # the opponent's defence against each statistic, and the pace
     tot = p.groupby(["game_id", "team_id"])[stats].sum()
     opp_of = {}
@@ -840,6 +862,7 @@ def prop_table(pl, g, decay=0.95, prior_min=150.0):
     team_adj["pace"] = {t: float(v / lg_pace) for t, v in platest.items()}
     for s in stats:
         p[f"mu_{s}"] = p[f"rate_{s}"] * p["em"] * p[f"opp_{s}"] * p["pace_f"]
+    p["mu3pct_fg3"] = p["rate_fg3a"] * p["pct3"] * p["em"] * p["opp_fg3"] * p["pace_f"]   # v37h: threes as attempts x shooting %
     return p, now, team_adj
 
 
@@ -862,44 +885,117 @@ def _calib(p, y, bins=10):
     return float(gap / max(len(p), 1))
 
 
-def prop_fit(pt, start, end, log=print):
-    """The weekly test for player props, on last season's rotation players (10+ earlier games, 15+ expected minutes), counting only
-    games they played (as bookmakers settle props). For each statistic: the spread that fits best, then the chances at the
-    player's own recent average (vs the simple guess: how often he went over it in his last 20 games) and the calibration of every
-    ladder step (10+, 15+ points...). Published when it beats the simple guess and its chances come true as often as they say."""
+def prop_mu(c, base_mu, alt_mu=None):
+    """A prop's expected figure from the tested settings: k x mu^beta (the level and a gentle stretch, both learned), mu being
+    the per-minute model, or for threes (mode "pct") attempts x shooting %."""
+    mu = alt_mu if c.get("mode") == "pct" and alt_mu is not None else base_mu
+    return c.get("k", 1.0) * np.maximum(np.asarray(mu, float), 0.05) ** c.get("beta", 1.0)
+
+
+def own_rate(h20, t):
+    """How often the player reached t in his last 20 games (rows of figures, NaN where fewer), pulled a little towards 50%."""
+    h = np.atleast_2d(np.asarray(h20, float))
+    t = np.asarray(t, float)
+    if t.ndim == 1:
+        t = t[:, None]                                           # one line per player-game
+    n = np.isfinite(h).sum(axis=1)
+    return (np.nansum(h >= t, axis=1) + 1) / (n + 2)
+
+
+def prop_p(c, mu, r, h20, t):
+    """Chance of t or more: the model's count, blended with the player's own recent record (weight w, learned on the tuning games)."""
+    pm = _nb_over(mu, r, t)
+    w = c.get("w", 0.0)
+    return pm if not w else (1 - w) * pm + w * own_rate(h20, t)
+
+
+def prop_r(c, phi, n):
+    """The count's spread for each player: the league's, or (with "c") his own last-20-game spread pulled towards the league's."""
+    if not c.get("c"):
+        return c["r"]
+    phi_g = 1.0 / c["r"]
+    phi = np.where(np.isfinite(np.asarray(phi, float)), phi, phi_g)
+    n = np.asarray(n, float)
+    return 1.0 / np.maximum((n * phi + c["c"] * phi_g) / (n + c["c"]), 0.005)
+
+
+def prop_fit(pt, start, end, split=None, log=print):
+    """The weekly test for player props on rotation players (10+ earlier games, 15+ expected minutes), counting only games they
+    played (as bookmakers settle props): tuned on the games from `start` to `split` (1 February of last season), judged on every
+    game after it, this season's included, so the verdict moves as games come in. Tuning picks, by fit on the tuning games: the
+    level and stretch of the expected figure, the spread (one for the league, or each player's own pulled towards it) and for
+    threes, per-minute rate or attempts x shooting %. Judged at each player's own recent average (vs the simple guess: how often he
+    went over it in his last 20 games) and on the calibration of every ladder step (10+, 15+ points...). Published when it beats the
+    simple guess and its chances come true as often as they say."""
     from scipy.stats import nbinom
     x_all = pt[(pt["date"] >= start) & (pt["date"] <= end) & (pt["nprev"] >= 10) & (pt["em"] >= 15)]
-    split = pd.Timestamp(f"{end.year}-02-01")                        # tuned on the games before 1 February, judged on the games after
+    split = split or pd.Timestamp(f"{end.year}-02-01")
     tr, x = x_all[x_all["date"] < split], x_all[x_all["date"] >= split]
     out = {}
     for s, (label, ladder) in PROP_STATS.items():
-        yt, mt = tr[s].fillna(0).values, np.maximum(tr[f"mu_{s}"].values, 0.05)
-        k = float(yt.sum() / mt.sum()) if mt.sum() > 0 else 1.0       # the statistic's overall level, corrected on the tuning games
+        yt = tr[s].fillna(0).values.astype(int)
         best = None
-        for r in (1, 2, 3, 5, 8, 12, 20, 40, 100):
-            ll = float(-nbinom.logpmf(yt.astype(int), r, r / (r + k * mt)).mean())
-            if best is None or ll < best[0]:
-                best = (ll, r)
-        r = best[1]
-        y, mu = x[s].fillna(0).values, np.maximum(k * x[f"mu_{s}"].values, 0.05)
+        for mode in (("rate", "pct") if s == "fg3" else ("rate",)):
+            base_t = tr[f"mu_{s}"].values
+            alt_t = tr["mu3pct_fg3"].values if mode == "pct" else None
+            for beta in (0.9, 1.0, 1.1, 1.2, 1.3, 1.45, 1.6):
+                raw = prop_mu({"mode": mode, "beta": beta}, base_t, alt_t)
+                k = float(yt.sum() / raw.sum()) if raw.sum() > 0 else 1.0
+                mt = k * raw
+                for r in (1, 2, 3, 5, 8, 12, 20, 40, 100):
+                    ll = float(-nbinom.logpmf(yt, r, r / (r + mt)).mean())
+                    if best is None or ll < best[0]:
+                        best = (ll, {"mode": mode, "beta": beta, "k": k, "r": r})
+        cfg_s = best[1]
+        mt = prop_mu(cfg_s, tr[f"mu_{s}"].values, tr["mu3pct_fg3"].values if s == "fg3" else None)
+        for cc in (5, 20, 60):                                       # each player's own spread, pulled towards the league's
+            rt = prop_r({**cfg_s, "c": cc}, tr[f"phi_{s}"].values, np.minimum(tr["nprev"].values, 20))
+            ll = float(-nbinom.logpmf(yt, rt, rt / (rt + mt)).mean())
+            if ll < best[0]:
+                best = (ll, {**cfg_s, "c": cc})
+        cfg_s = best[1]
+        # the blend with the player's own recent record, learned on the tuning games over every ladder step
+        L20 = pt.attrs.get("last20", {}).get(s)
+        if L20 is not None:
+            ht = L20[tr["row_i"].values]
+            mt = prop_mu(cfg_s, tr[f"mu_{s}"].values, tr["mu3pct_fg3"].values if s == "fg3" else None)
+            rt = prop_r(cfg_s, tr[f"phi_{s}"].values, np.minimum(tr["nprev"].values, 20))
+            pm_t = [(_nb_over(mt, rt, t), own_rate(ht, t), (yt >= t).astype(float)) for t in ladder]
+            best_w = None
+            for w in (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6):
+                ll = 0.0
+                for pmod, pown, yy in pm_t:
+                    pp = np.clip((1 - w) * pmod + w * pown, 1e-4, 1 - 1e-4)
+                    ll += float(-(yy * np.log(pp) + (1 - yy) * np.log(1 - pp)).mean())
+                if best_w is None or ll < best_w[0]:
+                    best_w = (ll, w)
+            cfg_s = {**cfg_s, "w": best_w[1]}
+        y = x[s].fillna(0).values
+        mu = prop_mu(cfg_s, x[f"mu_{s}"].values, x["mu3pct_fg3"].values if s == "fg3" else None)
+        r = prop_r(cfg_s, x[f"phi_{s}"].values, np.minimum(x["nprev"].values, 20))
+        hx = L20[x["row_i"].values] if L20 is not None else None
         line = np.floor(x[f"avg20_{s}"].values) + 0.5
         ok = np.isfinite(line)
         over = (y > line).astype(float)
-        pm = np.clip(_nb_over(mu, r, np.where(ok, np.floor(line) + 1, 1)), 1e-4, 1 - 1e-4)
+        pm = np.clip(prop_p(cfg_s, mu, r, hx, np.where(ok, np.floor(line) + 1, 1)), 1e-4, 1 - 1e-4)
         # the simple guess: how often he went over that line in his last 20 games (shrunk a little towards 50%)
         pn = np.clip(x[f"nov20_{s}"].fillna(0.5).values, 1e-4, 1 - 1e-4)
         llm = float(-(over[ok] * np.log(pm[ok]) + (1 - over[ok]) * np.log(1 - pm[ok])).mean())
         lln = float(-(over[ok] * np.log(pn[ok]) + (1 - over[ok]) * np.log(1 - pn[ok])).mean())
         lp, ly = [], []
         for t in ladder:
-            pr = _nb_over(mu, r, t)
+            pr = prop_p(cfg_s, mu, r, hx, t)
             keep = (pr >= 0.05) & (pr <= 0.95)
             lp.append(pr[keep]); ly.append((y[keep] >= t).astype(float))
         cal = _calib(np.concatenate(lp), np.concatenate(ly)) if lp else 1.0
         passed = bool(llm <= lln - 0.003 and cal <= 0.02)
-        out[s] = {"pass": passed, "r": r, "k": round(k, 4), "ll": round(llm, 4), "naive_ll": round(lln, 4), "calib": round(cal, 4), "n": int(ok.sum())}
-        log(f"  props, {label}: {int(ok.sum())} player-games; at each player's own average, log loss {llm:.4f} vs the simple guess's {lln:.4f}; "
-            f"chances off by {cal:.3f} on average -> {'published' if passed else 'not published'}")
+        n_cur = int((x["date"] >= pd.Timestamp(f"{end.year if end.month >= 8 else end.year - 1}-08-01")).sum()) if len(x) else 0
+        out[s] = {"pass": passed, **{k_: (round(v_, 4) if isinstance(v_, float) else v_) for k_, v_ in cfg_s.items()},
+                  "ll": round(llm, 4), "naive_ll": round(lln, 4), "calib": round(cal, 4), "n": int(ok.sum()), "n_this_season": n_cur}
+        how = (f"{'attempts x shooting %, ' if cfg_s.get('mode') == 'pct' else ''}stretch {cfg_s['beta']}, "
+               f"{'each player own spread' if cfg_s.get('c') else 'one league spread'}, {int(100 * cfg_s.get('w', 0))}% his own record")
+        log(f"  props, {label}: {int(ok.sum())} player-games ({n_cur} this season); at each player's own average, log loss {llm:.4f} vs the "
+            f"simple guess's {lln:.4f}; chances off by {cal:.3f} on average ({how}) -> {'published' if passed else 'not published'}")
     return out
 
 
@@ -910,8 +1006,13 @@ def prop_ladders(now_p, team_adj, s_cfg, opp, team, em_adj):
         c = (s_cfg or {}).get(s) or {}
         if not c.get("pass"):
             continue
-        mu = c.get("k", 1.0) * now_p[s] * em_adj * team_adj["latest"][s].get(opp, 1.0) * ((team_adj["pace"].get(team, 1.0) + team_adj["pace"].get(opp, 1.0)) / 2)
-        steps = [[t, float(_nb_over(mu, c["r"], t))] for t in ladder]
+        adj = team_adj["latest"][s].get(opp, 1.0) * ((team_adj["pace"].get(team, 1.0) + team_adj["pace"].get(opp, 1.0)) / 2)
+        base = now_p[s] * em_adj * adj
+        alt = now_p.get("fg3a", 0) * now_p.get("pct3", 0) * em_adj * adj if s == "fg3" else None
+        mu = float(prop_mu(c, base, alt))
+        r = float(np.asarray(prop_r(c, now_p.get(f"phi_{s}", np.nan), now_p.get("n20", 20))).ravel()[0]) if c.get("c") else c["r"]
+        h20 = [now_p.get(f"h20_{s}", []) + [np.nan] * (20 - len(now_p.get(f"h20_{s}", [])))]
+        steps = [[t, float(np.asarray(prop_p(c, mu, r, h20, t)).ravel()[0])] for t in ladder]
         steps = [st for st in steps if 0.05 <= st[1] <= 0.95][:5]
         if steps:
             res[s] = {"mean": round(float(mu), 1), "ladder": steps}
@@ -934,48 +1035,64 @@ def _three_way(mu, sd):
 
 
 def quarter_fit(bt, pq, log=print):
-    """The weekly test for halves and quarters on last season: each quarter's margin and points as shares of the game's predicted
-    margin and total (fitted on the games before 1 February, tested on the games after). Markets: the 1st half's and the 1st
-    quarter's winner (a tie is possible) and points, and which quarter scores most. Each published when it beats the simple guess
-    (how often each outcome happened in the fitting games) and its chances come true as often as they say."""
+    """The weekly test for halves and quarters: each period's margin and points as shares of the game's predicted margin and total
+    (fitted on last season's games before 1 February, judged on every game after, this season's included, so the verdicts move as
+    games come in). Markets: each half's and each quarter's winner (a tie is possible) and points (the 2nd half includes overtime,
+    as bookmakers settle it), and which quarter scores most. Each published when it beats the simple guess (how often each outcome
+    happened in the fitting games) and its chances come true as often as they say."""
     x, H, A = _qarrays(bt, pq)
     if len(x) < 400:
         log(f"  quarters: only {len(x)} games with scores by quarter; not tested yet")
         return {"tested": False}
-    fit_ = (x["date"] < pd.Timestamp(f"{int(x['date'].dt.year.max())}-02-01")).values
     m, T = x["margin"].values, x["total"].values
-    P = {}
-    for k in range(4):
-        mq, tq = H[:, k] - A[:, k], H[:, k] + A[:, k]
-        w = float((m[fit_] @ mq[fit_]) / (m[fit_] @ m[fit_])); sdm = float(np.std(mq[fit_] - w * m[fit_]))
-        sh = float((T[fit_] @ tq[fit_]) / (T[fit_] @ T[fit_])); sdt = float(np.std(tq[fit_] - sh * T[fit_]))
-        P[f"q{k + 1}"] = {"w": w, "sdm": sdm, "s": sh, "sdt": sdt}
     mh, th = (H[:, 0] + H[:, 1]) - (A[:, 0] + A[:, 1]), H[:, 0] + H[:, 1] + A[:, 0] + A[:, 1]
-    w = float((m[fit_] @ mh[fit_]) / (m[fit_] @ m[fit_])); sh = float((T[fit_] @ th[fit_]) / (T[fit_] @ T[fit_]))
-    P["h1"] = {"w": w, "sdm": float(np.std(mh[fit_] - w * m[fit_])), "s": sh, "sdt": float(np.std(th[fit_] - sh * T[fit_]))}
-    te = ~fit_
+    # v37h: the 2nd half, overtime included (as bookmakers settle it): the final score minus the 1st half
+    m2, t2 = (x["hs"].values - x["as"].values) - mh, (x["hs"].values + x["as"].values) - th
+    PERIODS = [("h1", "1st half", mh, th), ("h2", "2nd half", m2, t2)] + \
+              [(f"q{k + 1}", f"{['1st', '2nd', '3rd', '4th'][k]} quarter", H[:, k] - A[:, k], H[:, k] + A[:, k]) for k in range(4)]   # v37h: all of them
+    def fit_params(sel):
+        out_ = {}
+        for key, _, mq, tq in PERIODS:
+            w = float((m[sel] @ mq[sel]) / (m[sel] @ m[sel])); sh = float((T[sel] @ tq[sel]) / (T[sel] @ T[sel]))
+            out_[key] = {"w": w, "sdm": float(np.std(mq[sel] - w * m[sel])), "s": sh, "sdt": float(np.std(tq[sel] - sh * T[sel]))}
+        return out_
+    # v37h: two-way: the games before 1 February (last season) are judged with settings fitted on the rest, and the rest with
+    #      settings fitted on them, so every game is judged once and never with settings it helped fit (about twice the games)
+    fa = (x["date"] < pd.Timestamp(f"{int(x['date'].dt.year.max())}-02-01")).values
+    folds = [(fa, fit_params(~fa)), (~fa, fit_params(fa))]
+    P = fit_params(np.ones(len(x), bool))                                  # what's published: fitted on every game
     tests = {}
-    def judge(name, label, pm, outcome_idx, naive_p):
-        pm = np.clip(pm[te], 1e-4, 1); o = outcome_idx[te]; nv = np.clip(np.tile(naive_p, (te.sum(), 1)), 1e-4, 1)
+    def judge(name, label, pm, o, nv):
+        pm, nv = np.clip(pm, 1e-4, 1), np.clip(nv, 1e-4, 1)
         llm = float(-np.log(pm[np.arange(len(o)), o]).mean()); lln = float(-np.log(nv[np.arange(len(o)), o]).mean())
         Y = np.zeros_like(pm); Y[np.arange(len(o)), o] = 1
         cal = _calib(pm.ravel(), Y.ravel())
         passed = bool(llm <= lln - 0.003 and cal <= 0.03)
-        tests[name] = {"pass": passed, "ll": round(llm, 4), "naive_ll": round(lln, 4), "calib": round(cal, 4), "n": int(te.sum())}
-        log(f"  {label}: log loss {llm:.4f} vs the simple guess's {lln:.4f}; chances off by {cal:.3f} -> {'published' if passed else 'not published'}")
-    for key, label, mq in (("h1", "1st half winner", mh), ("q1", "1st quarter winner", H[:, 0] - A[:, 0])):
-        pm = _three_way(P[key]["w"] * m, P[key]["sdm"])
+        tests[name] = {"pass": passed, "ll": round(llm, 4), "naive_ll": round(lln, 4), "calib": round(cal, 4), "n": int(len(o))}
+        log(f"  {label}: {len(o)} games; log loss {llm:.4f} vs the simple guess's {lln:.4f}; chances off by {cal:.3f} -> {'published' if passed else 'not published'}")
+    for key, name, mq, _ in PERIODS:
         o = np.where(mq > 0, 0, np.where(mq == 0, 1, 2))
-        judge(f"{key}_winner", label, pm, o, np.bincount(o[fit_], minlength=3) / fit_.sum())
-    for key, label, tq in (("h1", "1st half points", th), ("q1", "1st quarter points", H[:, 0] + A[:, 0])):
-        L0 = float(np.floor(np.mean(tq[fit_]))) + 0.5                      # one fixed line: the season's usual figure
-        po = 1 - norm.cdf((L0 - P[key]["s"] * T) / P[key]["sdt"])
-        o = (tq < L0).astype(int)                                           # 0 = over, 1 = under
-        judge(f"{key}_total", label, np.c_[po, 1 - po], o, np.array([np.mean(tq[fit_] > L0), np.mean(tq[fit_] < L0)]))
+        pm, nv = np.zeros((len(x), 3)), np.zeros((len(x), 3))
+        for sel, Pf in folds:
+            pm[sel] = _three_way(Pf[key]["w"] * m[sel], Pf[key]["sdm"])
+            nv[sel] = np.bincount(o[~sel], minlength=3) / (~sel).sum()
+        judge(f"{key}_winner", f"{name} winner", pm, o, nv)
+    for key, name, _, tq in PERIODS:
+        pm, nv, o = np.zeros((len(x), 2)), np.zeros((len(x), 2)), np.zeros(len(x), int)
+        for sel, Pf in folds:
+            L0 = float(np.floor(np.mean(tq[~sel]))) + 0.5                   # one fixed line: the usual figure in the other games
+            po = 1 - norm.cdf((L0 - Pf[key]["s"] * T[sel]) / Pf[key]["sdt"])
+            pm[sel] = np.c_[po, 1 - po]
+            nv[sel] = [np.mean(tq[~sel] > L0), np.mean(tq[~sel] < L0)]
+            o[sel] = (tq[sel] < L0).astype(int)                             # 0 = over, 1 = under
+        judge(f"{key}_total", f"{name} points", pm, o, nv)
     qt = H + A
-    sims = _top_quarter(P, T)
     o = np.argmax(qt + np.random.default_rng(0).uniform(0, 0.01, qt.shape), axis=1)   # (a tie goes to either, at random)
-    judge("top_quarter", "highest-scoring quarter", sims, o, np.bincount(o[fit_], minlength=4) / fit_.sum())
+    pm, nv = np.zeros((len(x), 4)), np.zeros((len(x), 4))
+    for sel, Pf in folds:
+        pm[sel] = _top_quarter(Pf, T[sel])
+        nv[sel] = np.bincount(o[~sel], minlength=4) / (~sel).sum()
+    judge("top_quarter", "highest-scoring quarter", pm, o, nv)
     return {"tested": True, "params": P, "tests": tests}
 
 
@@ -998,7 +1115,9 @@ def quarter_markets(qcfg, margin, total):
     if not (qcfg or {}).get("tested"):
         return {}
     P, T, res = qcfg["params"], qcfg.get("tests", {}), {}
-    for key, name in (("h1", "1st half"), ("q1", "1st quarter")):
+    for key, name in (("h1", "1st half"), ("h2", "2nd half"), ("q1", "1st quarter"), ("q2", "2nd quarter"), ("q3", "3rd quarter"), ("q4", "4th quarter")):
+        if key not in P:
+            continue
         if T.get(f"{key}_winner", {}).get("pass"):
             ph, pd_, pa = _three_way(np.array([P[key]["w"] * margin]), P[key]["sdm"])[0]
             res[f"{key}_winner"] = {"name": f"{name} winner", "home": float(ph), "tie": float(pd_), "away": float(pa)}
@@ -1006,7 +1125,7 @@ def quarter_markets(qcfg, margin, total):
             mu = P[key]["s"] * total
             base = math.floor(mu) + 0.5
             res[f"{key}_total"] = {"name": f"{name} points", "expected": round(mu, 1),
-                                   "lines": [[base + d, float(1 - norm.cdf((base + d - mu) / P[key]["sdt"]))] for d in ((-6, -3, 0, 3, 6) if key == "h1" else (-4, -2, 0, 2, 4))]}
+                                   "lines": [[base + d, float(1 - norm.cdf((base + d - mu) / P[key]["sdt"]))] for d in ((-6, -3, 0, 3, 6) if key.startswith("h") else (-4, -2, 0, 2, 4))]}
     if T.get("top_quarter", {}).get("pass"):
         res["top_quarter"] = {"name": "Highest-scoring quarter", "p": [float(v) for v in _top_quarter(P, [total])[0]]}
     return res

@@ -126,6 +126,142 @@ for st_key, (ch, ca, word) in STATS.items():
             add_market(k0, f"{r_['HomeTeam']} over {lines_['h']} {word} (expected {mh_[i_]:.1f})", nb_over(mh_[i_], k_, lines_["h"]), st_key, f"Home {word} over the league line", code=f"H|{ch}|{lines_['h']}")
             add_market(k0, f"{r_['AwayTeam']} over {lines_['a']} {word} (expected {ma_[i_]:.1f})", nb_over(ma_[i_], k_, lines_["a"]), st_key, f"Away {word} over the league line", code=f"A|{ca}|{lines_['a']}")
 
+# ---------- 1b. v37f: halves (shots, shots on target, fouls, corners, passes) and full-match passes, from PitchAPI ----------
+# The same method as above, on PitchAPI's figures for every league it covers: each team's figure for and against (weighted towards
+# recent matches), the league's usual line, replayed week by week this season with earlier data only; trusted only if calibrated.
+# Halves come from PitchAPI's 1st / 2nd-half statistics; for shots and shots on target, from the shot-by-shot minutes where those
+# aren't stored yet (a shot in 1st-half stoppage time then counts in the 2nd half, a small error).
+HALF_KEYS = {"shots": ("total_shots", "TotalShots"), "sot": ("shots_on_target", "ShotsOnTarget"), "fouls": ("fouls", "Fouls"),
+             "corners": ("corners", "Corners", "corner_kicks"), "passes": ("passes", "Passes")}
+HALF_WORD = {"shots": "shots", "sot": "shots on target", "fouls": "fouls", "corners": "corners", "passes": "passes"}
+def _nid(x):
+    try:
+        return str(int(float(x)))
+    except Exception:
+        return ""
+def half_frames():
+    """Per league (our names): one row per match with each statistic's 1st- and 2nd-half figures (home and away), and full-match passes."""
+    if "PA_TACTICS" not in globals() or not len(PA_TACTICS):
+        return {}
+    inv_ = {f"{c}:{n}": our for our, (c, n) in {**PA_XG_LEAGUES, **PA_TACTIC_LEAGUES}.items()}
+    shp_, cnt_, shot_mids = f"{SAVE_DIR}/pitchapi_shots.csv", {}, set()
+    if os.path.exists(shp_):
+        s_ = pd.read_csv(shp_, dtype=str, usecols=lambda c: c in ("match_id", "team_id", "minute", "xgot")).dropna(subset=["team_id"])
+        if len(s_):
+            s_["tid"] = s_["team_id"].map(_nid)
+            s_["half"] = np.where(pd.to_numeric(s_["minute"], errors="coerce").fillna(0) <= 45, "1", "2")
+            s_["on"] = pd.to_numeric(s_.get("xgot"), errors="coerce").notna()
+            shot_mids = set(s_["match_id"].astype(str))
+            agg_ = s_.groupby(["match_id", "tid", "half"])["on"].agg(["size", "sum"])
+            cnt_ = {(str(m_), t_, h_): (int(n_), int(o_)) for (m_, t_, h_), n_, o_ in zip(agg_.index, agg_["size"].values, agg_["sum"].values)}
+    out = {}
+    for key_, g_ in PA_TACTICS.groupby("league"):
+        our = inv_.get(key_)
+        if not our:
+            continue
+        f_ = league_frame(our)
+        if f_ is None or not len(f_):
+            continue
+        mp_ = map_by_fixtures(g_.rename(columns={"date": "Date", "home": "H", "away": "A"})[["Date", "H", "A"]],
+                              f_[["Date", "HomeTeam", "AwayTeam"]].rename(columns={"HomeTeam": "H", "AwayTeam": "A"}))
+        rows_ = []
+        for r_ in g_.itertuples():
+            if r_.home not in mp_ or r_.away not in mp_:
+                continue
+            st_ = json.loads(r_.stats) if isinstance(r_.stats, str) else {}
+            sh_ = json.loads(r_.stats_h) if isinstance(getattr(r_, "stats_h", None), str) and r_.stats_h.startswith("{") else {}
+            pick = lambda d_, ks_: next((d_[k] for k in ks_ if k in d_), None)
+            row = {"League": our, "Date": pd.Timestamp(r_.date).normalize(), "HomeTeam": mp_[r_.home], "AwayTeam": mp_[r_.away]}
+            full_p = pick(st_, HALF_KEYS["passes"])
+            if full_p:
+                row["passes_h"], row["passes_a"] = full_p
+            for sk_, ks_ in HALF_KEYS.items():
+                for h_ in ("1", "2"):
+                    v_ = pick(sh_.get(h_, {}), ks_)
+                    if v_ is None and sk_ in ("shots", "sot") and str(r_.id) in shot_mids:
+                        j_ = 0 if sk_ == "shots" else 1
+                        v_ = [cnt_.get((str(r_.id), _nid(getattr(r_, "home_id", None)), h_), (0, 0))[j_],
+                              cnt_.get((str(r_.id), _nid(getattr(r_, "away_id", None)), h_), (0, 0))[j_]]
+                    if v_ is not None:
+                        row[f"{sk_}{h_}_h"], row[f"{sk_}{h_}_a"] = v_
+            rows_.append(row)
+        if rows_:
+            out[our] = pd.DataFrame(rows_).sort_values("Date").drop_duplicates(["Date", "HomeTeam", "AwayTeam"]).reset_index(drop=True)
+    return out
+
+def team_stat_markets(frames, ch, ca, word, st_key, parts=("tot", "h", "a"), min_n=300):
+    """Over / under the league's usual line for a team statistic (columns ch, ca) in each league frame: the weekly replay with
+    its calibration test, then this week's fixtures. The same method as section 1."""
+    rows_p, rows_y, rows_d, rows_l = {p_: [] for p_ in parts}, {p_: [] for p_ in parts}, [], []
+    live_parts = []
+    for lg_, lg in frames.items():
+        if ch not in lg or ca not in lg:
+            continue
+        lg = lg.dropna(subset=[ch, ca])
+        if len(lg) < min_n:
+            continue
+        lines_ = {"tot": np.floor((lg[ch] + lg[ca]).median()) + 0.5, "h": np.floor(lg[ch].median()) + 0.5, "a": np.floor(lg[ca].median()) + 0.5}
+        test_ = lg[lg["Date"] >= season_start_m]
+        wk_ = (test_["Date"] - pd.to_timedelta(test_["Date"].dt.weekday, unit="D")).dt.normalize()
+        for w_ in (sorted(wk_.unique()) if RUN_REPLAYS else []):
+            w_ = pd.Timestamp(w_)
+            tr_ = lg[lg["Date"] < w_]
+            games = test_[(test_["Date"] >= w_) & (test_["Date"] < w_ + pd.Timedelta(days=7))]
+            known = set(pd.concat([tr_["HomeTeam"], tr_["AwayTeam"]]).value_counts().loc[lambda s: s >= 5].index)
+            games = games[games["HomeTeam"].isin(known) & games["AwayTeam"].isin(known)]
+            if games.empty or len(tr_) < 200:
+                continue
+            m_ = fit_weighted(tr_, ch, ca, 0.05, 365)
+            mh_, ma_ = shrunk_means(m_, games)
+            fh_, fa_ = shrunk_means(m_, tr_.tail(600))
+            k_ = est_k(np.r_[tr_.tail(600)[ch], tr_.tail(600)[ca]], np.r_[fh_, fa_])
+            for part, mu_, y_ in [("tot", mh_ + ma_, games[ch] + games[ca]), ("h", mh_, games[ch]), ("a", ma_, games[ca])]:
+                if part in parts:
+                    rows_p[part] += list(nb_over(mu_, k_, lines_[part]))
+                    rows_y[part] += list((y_.values > lines_[part]).astype(float))
+            rows_d += [np.datetime64(d_) for d_ in games["Date"]]; rows_l += [lg_] * len(games)
+        fx_ = upc_m[upc_m["Competition"] == lg_] if len(upc_m) else pd.DataFrame()
+        if len(fx_):
+            m_ = fit_weighted(lg, ch, ca, 0.05, 365)
+            g_ = fx_.rename(columns={"Home": "HomeTeam", "Away": "AwayTeam"})
+            known = set(pd.concat([lg["HomeTeam"], lg["AwayTeam"]]))
+            g_ = g_[g_["HomeTeam"].isin(known) & g_["AwayTeam"].isin(known)]
+            if len(g_):
+                mh_, ma_ = shrunk_means(m_, g_)
+                fh_, fa_ = shrunk_means(m_, lg.tail(600))
+                k_ = est_k(np.r_[lg.tail(600)[ch], lg.tail(600)[ca]], np.r_[fh_, fa_])
+                live_parts.append((g_, mh_, ma_, k_, lines_))
+    labs = {"tot": f"Total {word}", "h": f"Home {word}", "a": f"Away {word}"}
+    for part in parts:
+        if len(rows_p[part]) >= 300:
+            band_check(f"{labs[part]} over the league line", rows_p[part], rows_y[part], np.array(rows_d), rows_l)
+    n_live = 0
+    for g_, mh_, ma_, k_, lines_ in live_parts:
+        for i_, r_ in enumerate(g_.to_dict("records")):
+            k0 = (r_["Competition"], str(r_["Date"])[:10], r_["HomeTeam"], r_["AwayTeam"])
+            if "tot" in parts:
+                add_market(k0, f"Over {lines_['tot']} total {word} (expected {mh_[i_] + ma_[i_]:.1f})", nb_over(mh_[i_] + ma_[i_], k_, lines_["tot"]), st_key, f"Total {word} over the league line", code=f"TOT|{ch}|{ca}|{lines_['tot']}")
+            if "h" in parts:
+                add_market(k0, f"{r_['HomeTeam']} over {lines_['h']} {word} (expected {mh_[i_]:.1f})", nb_over(mh_[i_], k_, lines_["h"]), st_key, f"Home {word} over the league line", code=f"H|{ch}|{lines_['h']}")
+            if "a" in parts:
+                add_market(k0, f"{r_['AwayTeam']} over {lines_['a']} {word} (expected {ma_[i_]:.1f})", nb_over(ma_[i_], k_, lines_["a"]), st_key, f"Away {word} over the league line", code=f"A|{ca}|{lines_['a']}")
+            n_live += 1
+    return n_live
+
+try:
+    HALF_FRAMES = half_frames()
+    n_hf = {lg_: int(f_.filter(regex=r"^shots1_h$").notna().sum().sum()) for lg_, f_ in HALF_FRAMES.items()}
+    print(f"Half-by-half statistics (PitchAPI): {sum(len(f_) for f_ in HALF_FRAMES.values())} matches in {len(HALF_FRAMES)} leagues; "
+          f"1st-half shots known for {sum(n_hf.values())}; corners by half for "
+          f"{sum(int(f_['corners1_h'].notna().sum()) if 'corners1_h' in f_ else 0 for f_ in HALF_FRAMES.values())}.")
+    for h_, hw_ in (("1", "1st-half"), ("2", "2nd-half")):
+        for sk_ in ("shots", "sot", "corners", "passes", "fouls"):
+            team_stat_markets(HALF_FRAMES, f"{sk_}{h_}_h", f"{sk_}{h_}_a", f"{hw_} {HALF_WORD[sk_]}", f"h{h_}_{sk_}", parts=("tot",) if sk_ == "fouls" else ("tot", "h", "a"))
+    team_stat_markets(HALF_FRAMES, "passes_h", "passes_a", "passes", "passes")
+except Exception as ex_:
+    import traceback; traceback.print_exc()
+    print("Half-by-half markets: skipped this run (the other markets are unaffected).")
+
 # ---------- 2. half-time markets ----------
 HT_SHARE = {}
 for lg_ in LEAGUES.values():

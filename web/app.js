@@ -181,6 +181,7 @@
   const STAT_OF = { corners: "Corners", cards: "Cards", shots: "Shots", sot: "SOT", fouls: "Fouls", tackles: "Tackles", offsides: "Offsides", throwins: "Throws", goals: "G" };
   function statFamily(bet, family) {
     if (family && STAT_OF[family]) return family;
+    if (/^h[12]_|^passes$/.test(family || "")) return null;         // v37f: no full-match averages beside a half's market
     const b = String(bet).toLowerCase();
     if (/corner/.test(b)) return "corners"; if (/card/.test(b)) return "cards"; if (/throw/.test(b)) return "throwins"; if (/tackle/.test(b)) return "tackles";
     if (/offside/.test(b)) return "offsides"; if (/foul/.test(b)) return "fouls"; if (/on target/.test(b)) return "sot"; if (/shot/.test(b)) return "shots";
@@ -373,7 +374,11 @@
   }
 
   const FAMILY = [["shots", "Shots"], ["sot", "Shots on target"], ["fouls", "Fouls"], ["halftime", "Half-time"], ["halftime_both", "Goals in both halves"],
-    ["timing", "Goal timing"], ["penalty", "Penalties"], ["throwins", "Throw-ins"], ["offsides", "Offsides"], ["tackles", "Tackles"], ["player_props", "Player props"]];
+    ["timing", "Goal timing"], ["penalty", "Penalties"], ["throwins", "Throw-ins"], ["offsides", "Offsides"], ["tackles", "Tackles"], ["passes", "Passes"], ["player_props", "Player props"],
+    // v37f: halves
+    ["h1_shots", "1st-half shots"], ["h2_shots", "2nd-half shots"], ["h1_sot", "1st-half shots on target"], ["h2_sot", "2nd-half shots on target"],
+    ["h1_corners", "1st-half corners"], ["h2_corners", "2nd-half corners"], ["h1_fouls", "1st-half fouls"], ["h2_fouls", "2nd-half fouls"],
+    ["h1_passes", "1st-half passes"], ["h2_passes", "2nd-half passes"]];
   const famName = f => (FAMILY.find(([k]) => k === f) || [f, String(f || "Other").replace(/_/g, " ").replace(/^./, c => c.toUpperCase())])[1];
   const famRank = f => { const i = FAMILY.findIndex(([k]) => k === f); return i < 0 ? 99 : i; };
   const TABS = [["overview", "Overview"], ["verdict", "Verdict"], ["markets", "Markets"], ["goals", "Goals & more"], ["lineups", "Lineups"], ["players", "Players"],
@@ -753,7 +758,8 @@
           ...(m.pOverCorners != null ? [["9.5", ["corners"], sel("Over 9.5 corners", m.pOverCorners, inv(m.pOverCorners)), sel("Under 9.5 corners", 1 - m.pOverCorners, inv(1 - m.pOverCorners))]] : []),
           ...(m.pOverCards != null ? [["4.5", ["cards"], sel("Over 4.5 cards", m.pOverCards, inv(m.pOverCards)), sel("Under 4.5 cards", 1 - m.pOverCards, inv(1 - m.pOverCards))]] : [])]) : ""}
         </section>` : ""}
-      ${markets.length ? `<section class="section" data-tab="goals"><h2>More markets</h2>${Object.entries(fam).sort((x, y) => famRank(x[0]) - famRank(y[0])).map(([f, xs]) => {
+      ${markets.length ? `<section class="section" data-tab="goals"><h2>More markets</h2>${Object.entries(fam).sort((x, y) => famRank(x[0]) - famRank(y[0])).map(([f, xs], i_, all_) => {
+          const halvesHead = /^h[12]_/.test(f) && !(i_ && /^h[12]_/.test(all_[i_ - 1][0])) ? `<h2 class="halves-h">Halves</h2>` : "";   // v37f
           // v35: lines ("Over 4.5 total offsides", "Al Hazem over 2.5 offsides") as the over / under grid; the rest (players, first
           //      scorer, a penalty) as cells two to a row. The trusted / experimental tag by the heading, or on each row when they're mixed
           const allT = xs.every(x => x.trusted), noneT = !xs.some(x => x.trusted), rows = [], singles = [];
@@ -766,7 +772,7 @@
             else singles.push(mcell(sel(base, x.p, x.fair), base, 0)); });
           const rank = r => (r[1][0] === "Total" ? 0 : r[1][0] === H ? 1 : r[1][0] === A ? 2 : 3);   // the match total, then home, then away
           rows.sort((a, b) => rank(a) - rank(b) || parseFloat(a[0]) - parseFloat(b[0]));
-          return `<h3>${esc(famName(f))} ${allT || noneT ? tagOf(allT) : ""}</h3>${rows.length ? ouGrid(rows) : ""}${singles.length ? cellRow(singles, 2) : ""}`; }).join("")}
+          return `${halvesHead}<h3>${esc(famName(f))} ${allT || noneT ? tagOf(allT) : ""}</h3>${rows.length ? ouGrid(rows) : ""}${singles.length ? cellRow(singles, 2) : ""}`; }).join("")}
           <p class="small muted">Trusted markets have passed their calibration test; experimental ones are still being tested. "Under" is the other side of each line.</p></section>` : ""}
       <section class="section" data-tab="lineups">
         ${sheetSoon ? `<div data-lineups-live></div>` : ""}
@@ -1346,15 +1352,19 @@
     const win3 = (k) => q[k] ? `<h3>${esc(q[k].name)}</h3>${cellRow([mcell(sel(`${q[k].name}: ${A.name}`, q[k].away), A.short, lean(q[k].away, 3)), mcell(sel(`${q[k].name}: tie`, q[k].tie), "Tie", lean(q[k].tie, 3)), mcell(sel(`${q[k].name}: ${H.name}`, q[k].home), H.short, lean(q[k].home, 3))], 3)}` : "";
     const tot = (k) => q[k] ? `<h3>${esc(q[k].name)} <small class="muted">expected ${q[k].expected}</small></h3>${ouGrid(q[k].lines.map(([l, p]) => [String(l), [], sel(`${q[k].name}: over ${l}`, p), sel(`${q[k].name}: under ${l}`, 1 - p)]))}` : "";
     const top = q.top_quarter ? `<h3>${esc(q.top_quarter.name)}</h3>${cellRow(q.top_quarter.p.map((p, i) => mcell(sel(`Highest-scoring quarter: Q${i + 1}`, p), `Q${i + 1}`, lean(p, 4))), 4)}` : "";
-    if (win3("h1_winner") + tot("h1_total") + win3("q1_winner") + tot("q1_total") + top)
-      html += `<h2>Halves and quarters</h2>${win3("h1_winner")}${tot("h1_total")}${win3("q1_winner")}${tot("q1_total")}${top}<p class="small muted">A half or quarter can end level, so "Tie" is its own outcome.</p>`;
+    const periods = ["h1", "h2", "q1", "q2", "q3", "q4"].map(p_ => win3(`${p_}_winner`) + tot(`${p_}_total`)).join("");   // v37h: every half and quarter that passed
+    if (periods + top)
+      html += `<h2>Halves and quarters</h2>${periods}${top}<p class="small muted">A half or quarter can end level, so "Tie" is its own outcome. The 2nd half includes overtime.</p>`;
     const pr = g.props || {}, LAB = { pts: ["Points", "pts"], reb: ["Rebounds", "reb"], ast: ["Assists", "ast"], fg3: ["3-pointers made", "threes"] };
     const statKeys = Object.keys(LAB).filter(k => ["away", "home"].some(s => (pr[s] || []).some(p => p.stats && p.stats[k])));
     if (statKeys.length) {
+      // v37g: one statistic at a time (a switch above the list), the last one chosen remembered on this device
+      const shown = statKeys.includes(store.get("propstat", "")) ? store.get("propstat", "") : statKeys[0];
       html += `<h2>Player props</h2><p class="small muted">Each player's chance to reach each figure, if he plays. From his recent output per minute, his expected minutes (the injury report counts), the opponent's defence and the pace.</p>`
-        + statKeys.map(k => `<h3>${LAB[k][0]}</h3>${["away", "home"].map(s => (pr[s] || []).filter(p => p.stats && p.stats[k]).map(p => `<div class="proprow"><span class="pn"><a href="#/bb/player/${esc(slugify(p.name))}-${esc(p.id)}">${esc(p.name)}</a>
+        + (statKeys.length > 1 ? `<div class="tabs" role="tablist">${statKeys.map(k => `<button class="chip ${k === shown ? "on" : ""}" data-pstat="${k}" role="tab" aria-selected="${k === shown}">${LAB[k][0]}</button>`).join("")}</div>` : "")
+        + statKeys.map(k => `<div data-pstat-block="${k}"${k === shown ? "" : " hidden"}><h3>${LAB[k][0]}</h3>${["away", "home"].map(s => (pr[s] || []).filter(p => p.stats && p.stats[k]).map(p => `<div class="proprow"><span class="pn"><a href="#/bb/player/${esc(slugify(p.name))}-${esc(p.id)}">${esc(p.name)}</a>
             <small class="muted">${esc((s === "home" ? H : A).short)} · expected ${p.stats[k].mean}${p.status ? ` · ${esc(p.status)}` : ""}</small></span>
-            ${cellRow(p.stats[k].ladder.map(([t, pp]) => mcell(sel(`${p.name} ${t}+ ${LAB[k][1]}`, pp), `${t}+`, lean(pp, 2))), 5)}</div>`).join("")).join("")}`).join("");
+            ${cellRow(p.stats[k].ladder.map(([t, pp]) => mcell(sel(`${p.name} ${t}+ ${LAB[k][1]}`, pp), `${t}+`, lean(pp, 2))), 5)}</div>`).join("")).join("")}</div>`).join("");
     }
     return html;
   }
@@ -1590,6 +1600,10 @@
       ts.closest("tr").querySelectorAll("th").forEach(h => delete h.dataset.dir); ts.dataset.dir = String(dir);
       const v = tr => { const t = (tr.cells[i] || {}).textContent || ""; const n = parseFloat(t.replace(/^\+/, "")); return isFinite(n) ? n : -1e9; };
       [...tb.rows].sort((a, b) => dir * (v(a) - v(b))).forEach(r => tb.appendChild(r)); return; }
+    const psw = ev.target.closest("[data-pstat]");                   // v37g: player props, one statistic at a time
+    if (psw) { const box = psw.closest(".bbbody") || shell; store.set("propstat", psw.dataset.pstat);
+      psw.parentElement.querySelectorAll("[data-pstat]").forEach(b => { const on = b === psw; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); });
+      box.querySelectorAll("[data-pstat-block]").forEach(d => { d.hidden = d.dataset.pstatBlock !== psw.dataset.pstat; }); hit("bb_prop_switch"); return; }
     const qf = ev.target.closest("[data-qf]");                       // v37d: scoring plays by quarter
     if (qf) { const box = qf.closest(".bbbody"); qf.parentElement.querySelectorAll("[data-qf]").forEach(b => b.classList.toggle("on", b === qf));
       box.querySelectorAll("[data-q]").forEach(li => { li.hidden = qf.dataset.qf !== "all" && li.dataset.q !== qf.dataset.qf; }); return; }
