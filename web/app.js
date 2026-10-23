@@ -1750,5 +1750,12 @@
   window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installPrompt = e; if ((location.hash || "").startsWith("#/more")) route(true); });
   window.addEventListener("appinstalled", () => { installPrompt = null; hit("app_installed"); });
   showAccaCount();
+  // v37e: reloading a date page (football or basketball) goes back to today; a link to a date still opens that date
+  try {
+    const nav_ = (performance.getEntriesByType && performance.getEntriesByType("navigation")[0]) || {};
+    const reloaded = nav_.type === "reload" || (performance.navigation && performance.navigation.type === 1);
+    if (reloaded && /^#\/(bb\/)?day\//.test(location.hash || ""))
+      history.replaceState(null, "", location.pathname + location.search + (location.hash.startsWith("#/bb") ? "#/bb" : "#/"));
+  } catch (e) {}
   route();
 })();
