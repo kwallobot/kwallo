@@ -129,8 +129,9 @@ for st_key, (ch, ca, word) in STATS.items():
 # ---------- 1b. v37f: halves (shots, shots on target, fouls, corners, passes) and full-match passes, from PitchAPI ----------
 # The same method as above, on PitchAPI's figures for every league it covers: each team's figure for and against (weighted towards
 # recent matches), the league's usual line, replayed week by week this season with earlier data only; trusted only if calibrated.
-# Halves come from PitchAPI's 1st / 2nd-half statistics; for shots and shots on target, from the shot-by-shot minutes where those
-# aren't stored yet (a shot in 1st-half stoppage time then counts in the 2nd half, a small error).
+# Halves come from PitchAPI's own 1st / 2nd-half statistics only (exact). v37i: the earlier fallback that counted shots from the
+# shot-by-shot data is gone: it overcounted (off-target shots carry an xG-on-target value too, and the shot file can hold a match
+# twice), so a match without PitchAPI's half figures yet simply has none until the re-read reaches it.
 HALF_KEYS = {"shots": ("total_shots", "TotalShots"), "sot": ("shots_on_target", "ShotsOnTarget"), "fouls": ("fouls", "Fouls"),
              "corners": ("corners", "Corners", "corner_kicks"), "passes": ("passes", "Passes")}
 HALF_WORD = {"shots": "shots", "sot": "shots on target", "fouls": "fouls", "corners": "corners", "passes": "passes"}
@@ -144,16 +145,6 @@ def half_frames():
     if "PA_TACTICS" not in globals() or not len(PA_TACTICS):
         return {}
     inv_ = {f"{c}:{n}": our for our, (c, n) in {**PA_XG_LEAGUES, **PA_TACTIC_LEAGUES}.items()}
-    shp_, cnt_, shot_mids = f"{SAVE_DIR}/pitchapi_shots.csv", {}, set()
-    if os.path.exists(shp_):
-        s_ = pd.read_csv(shp_, dtype=str, usecols=lambda c: c in ("match_id", "team_id", "minute", "xgot")).dropna(subset=["team_id"])
-        if len(s_):
-            s_["tid"] = s_["team_id"].map(_nid)
-            s_["half"] = np.where(pd.to_numeric(s_["minute"], errors="coerce").fillna(0) <= 45, "1", "2")
-            s_["on"] = pd.to_numeric(s_.get("xgot"), errors="coerce").notna()
-            shot_mids = set(s_["match_id"].astype(str))
-            agg_ = s_.groupby(["match_id", "tid", "half"])["on"].agg(["size", "sum"])
-            cnt_ = {(str(m_), t_, h_): (int(n_), int(o_)) for (m_, t_, h_), n_, o_ in zip(agg_.index, agg_["size"].values, agg_["sum"].values)}
     out = {}
     for key_, g_ in PA_TACTICS.groupby("league"):
         our = inv_.get(key_)
@@ -178,10 +169,6 @@ def half_frames():
             for sk_, ks_ in HALF_KEYS.items():
                 for h_ in ("1", "2"):
                     v_ = pick(sh_.get(h_, {}), ks_)
-                    if v_ is None and sk_ in ("shots", "sot") and str(r_.id) in shot_mids:
-                        j_ = 0 if sk_ == "shots" else 1
-                        v_ = [cnt_.get((str(r_.id), _nid(getattr(r_, "home_id", None)), h_), (0, 0))[j_],
-                              cnt_.get((str(r_.id), _nid(getattr(r_, "away_id", None)), h_), (0, 0))[j_]]
                     if v_ is not None:
                         row[f"{sk_}{h_}_h"], row[f"{sk_}{h_}_a"] = v_
             rows_.append(row)
@@ -248,6 +235,14 @@ def team_stat_markets(frames, ch, ca, word, st_key, parts=("tot", "h", "a"), min
             n_live += 1
     return n_live
 
+# v37i: the half-shots tests and corrections saved before the fix were learned on miscounted data: ignore them until a weekly run
+#       re-tests (those markets show as experimental, uncorrected, meanwhile)
+HALVES_V = 2
+_mt_saved = json.load(open(MT_PATH)) if os.path.exists(MT_PATH) else {}
+if _mt_saved.get("halves_v") != HALVES_V:
+    for d_ in (MARKET_TRUST, PLAYER_CAL):
+        for k_ in [k for k in list(d_) if "-half shots" in str(k)]:
+            d_.pop(k_, None)
 try:
     HALF_FRAMES = half_frames()
     n_hf = {lg_: int(f_.filter(regex=r"^shots1_h$").notna().sum().sum()) for lg_, f_ in HALF_FRAMES.items()}
@@ -469,7 +464,7 @@ if "THROW_LONG" in globals() and len(THROW_LONG) >= 600 and "League" in THROW_LO
                        "Total throw-ins over the league line", code=f"THROW|{THROW_LINES[lg_]}")
     print(f"Throw-ins: {len(THROW_LONG)} team-matches; lines by league: " + ", ".join(f"{k} {v}" for k, v in THROW_LINES.items()))
 if RUN_REPLAYS:
-    json.dump({"trust": {k: {kk: vv for kk, vv in v.items() if kk != "table"} for k, v in MARKET_TRUST.items()}, "cal": PLAYER_CAL},
+    json.dump({"trust": {k: {kk: vv for kk, vv in v.items() if kk != "table"} for k, v in MARKET_TRUST.items()}, "cal": PLAYER_CAL, "halves_v": HALVES_V},
               open(MT_PATH, "w"), default=float)
 # ---------- 5. v30: offsides and tackles (team counts from PitchAPI and ESPN): total and each team, each league's own line ----------
 def count_market(stat_, label_, family_):
