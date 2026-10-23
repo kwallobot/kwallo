@@ -344,3 +344,19 @@ ul.sq li { display: grid; grid-template-columns: 2.2rem 1fr auto; align-items: c
 .sport a.on { background: var(--ink); color: var(--bg); }
 tr.cut td { border-top: 2px solid var(--muted); }
 .mside a { color: inherit; text-decoration: none; }
+
+/* v37d: NBA game pages: the lead and live-chance charts, the box score, quarters, player props */
+.bbchart { width: 100%; height: auto; display: block; }
+.bbchart .qline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 3; }
+.bbchart .zline { stroke: var(--muted); stroke-width: 1; }
+.bbchart .clab { font: 600 9px var(--font); fill: var(--muted); }
+table.box td, table.box th { padding: .3rem .4rem; white-space: nowrap; }
+table.box th[data-tsort] { cursor: pointer; }
+table.box th[data-dir]::after { content: " ▾"; } table.box th[data-dir="1"]::after { content: " ▴"; }
+table.box td.pname { position: sticky; left: 0; background: var(--bg); max-width: 11rem; overflow: hidden; text-overflow: ellipsis; }
+.qtable td, .qtable th { white-space: nowrap; }
+.proprow { margin: .5rem 0 .2rem; }
+.proprow .pn { display: block; margin-bottom: .1rem; }
+.proprow .mcells { margin: .2rem 0 .6rem; }
+.plays li[hidden] { display: none; }
+.bbtabs { margin-top: .4rem; }

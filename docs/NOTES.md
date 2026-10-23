@@ -1,6 +1,34 @@
 # Kwallo: roadmap and decisions
 
-*Last updated: 23 October 2026 (v37c built: the league gate over three seasons, held leagues shown without chances, Matches / Games; v37b: NBA player ratings and the live record; v37: the NBA. v36 before it: the 22 leagues, the league gate, PlayerElo, the installable app and the live view).*
+*Last updated: 23 October 2026 (v37d built: NBA box scores, quarters, plays, player pages, leaders; halves and quarters, rebound and assist props, live chances. v37c built: the league gate over three seasons, held leagues shown without chances, Matches / Games; v37b: NBA player ratings and the live record; v37: the NBA. v36 before it: the 22 leagues, the league gate, PlayerElo, the installable app and the live view).*
+
+### v37d, as built (23 October 2026): NBA stats pages, halves and quarters, player props, live chances
+- **Worker** `/api/bbgame?id=`: ESPN's game page, trimmed, with:
+  - the status, the score by quarter, team statistics and every player's box-score line
+  - the scoring plays
+
+  It's cached for 30 seconds in play, 5 minutes before tip-off, and a day after the final.
+- **Game page tabs:**
+  - **Overview:** the quarters with 1st- and 2nd-half totals, Kwallo's pick ✓/✗, game leaders, scoring runs of 8+ points, the lead chart, Kwallo's live chance through the game, and the live chances card in play.
+  - **Markets:** winner, spread and total; halves and quarters; player props.
+  - **Box score** (sortable), **Team stats**, and **Plays** (scoring plays, filterable by quarter).
+  - **Past games** open as `#/bb/result/{id}/{date}` from past days, team form and player logs.
+- **Player pages** (`#/bb/player/{name}-{id}`): this season's and last season's averages, plus the last 10 games. Teams get a sortable roster. **Leaders** (`#/bb/leaders`): points, rebounds, assists, steals, blocks and threes per game, for players with 40% of their team's games.
+- **Data:** 3-pointers are added to the box scores (the history files are downloaded again once, and this season's box scores are re-read once). The score by quarter comes from the scoreboards; last season's is read once (`past_quarters.csv`).
+- **The tests**, weekly, each published only if it passes. First results (2025/26):
+  - **Halves and quarters:** fitted before 1 February, judged after. 1st half winner 0.748 against 0.818 for the simple guess. 1st quarter winner, 1st half points and 1st quarter points also pass. The highest-scoring quarter fails (no better than the simple guess).
+  - **Live chances:** tested at the end of Q1, at half-time and at the end of Q3 of every game (3,672 moments). Log loss 0.457 against 0.580 for the pre-game chances alone, and 0.016 out on calibration: passed. The spread is 13 × 1.35 × (share of the game left)^0.45.
+  - **Player props:** tuned before 1 February, judged after, on 8,674 rotation-player games. The model must beat the player's own over-rate at his 20-game average, and be no more than 0.02 out on calibration.
+
+    | Prop | Result |
+    |---|---|
+    | Rebounds | passed (0.675 vs 0.695, 0.013 out) |
+    | Assists | passed (0.671 vs 0.696, 0.010 out) |
+    | Points | not passed: better than the guess, but 0.039 out on calibration |
+    | 3-pointers | not passed: worse than the guess |
+
+    Shown as ladders (4+, 6+, 8+ …) for each likely player: 15+ expected minutes and not ruled out by the injury report.
+- **First run after upload:** if `model.json` has no test results yet, the daily run does these tests too, using the stored replay.
 
 ### v37c, as built (23 October 2026): a fairer league gate, held leagues shown, Matches / Games
 - **Why:** the first v36 gate (this season only, 50–200 matches) held back 13 of the 22 new leagues. Some failed only the naive test, while being close to the bookmakers or even ahead of them: 2. Bundesliga (0.018 behind), Serie B (0.003 behind) and League Two (0.004 ahead). In very even leagues a small sample can make the naive guess look good by luck.

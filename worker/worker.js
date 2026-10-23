@@ -588,6 +588,44 @@ function sameName(a, b) {
   const x = nameToks(a), y = nameToks(b);
   return !!(x.length && y.length && x[x.length - 1] === y[y.length - 1] && (x[0].startsWith(y[0]) || y[0].startsWith(x[0])));
 }
+// v37d: one NBA game from ESPN's game page, trimmed for the website: the status, the score by quarter, team statistics, every
+// player's box-score line and the scoring plays (for the runs, the lead chart and the live chances).
+const BB_KEYS = { minutes: "min", points: "pts", rebounds: "reb", assists: "ast", "fieldGoalsMade-fieldGoalsAttempted": "fg",
+  "threePointFieldGoalsMade-threePointFieldGoalsAttempted": "fg3", "freeThrowsMade-freeThrowsAttempted": "ft", steals: "stl", blocks: "blk",
+  turnovers: "to", offensiveRebounds: "oreb", defensiveRebounds: "dreb", fouls: "pf", plusMinus: "pm" };
+async function bbGame(id) {
+  const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${id}`, { headers: { "user-agent": "Mozilla/5.0" } });
+  if (!r.ok) return null;
+  const s = await r.json(), comp = (((s.header || {}).competitions) || [])[0] || {}, st = (comp.status || {}).type || {};
+  const sideOf = {};
+  const teams = (comp.competitors || []).map(c => { sideOf[String((c.team || {}).id)] = c.homeAway;
+    return { side: c.homeAway, id: String((c.team || {}).id || ""), abbr: (c.team || {}).abbreviation, name: (c.team || {}).displayName, short: (c.team || {}).shortDisplayName || (c.team || {}).name,
+             color: (c.team || {}).color ? "#" + c.team.color : null, score: c.score != null ? +c.score : null, lines: (c.linescores || []).map(l => +(l.displayValue ?? l.value ?? 0)) }; });
+  for (const t of (s.boxscore || {}).teams || []) {
+    const tt = teams.find(x => x.id === String((t.team || {}).id));
+    if (tt) tt.stats = Object.fromEntries((t.statistics || []).map(x => [x.name, x.displayValue]));
+  }
+  const players = { home: [], away: [] };
+  for (const t of (s.boxscore || {}).players || []) {
+    const side = sideOf[String((t.team || {}).id)];
+    if (!side) continue;
+    for (const blk of t.statistics || []) {
+      const keys = blk.keys || [];
+      for (const a of blk.athletes || []) {
+        const ath = a.athlete || {}, vals = a.stats || [], sx = {};
+        keys.forEach((k, i) => { if (BB_KEYS[k] && vals[i] != null && vals[i] !== "") sx[BB_KEYS[k]] = vals[i]; });
+        players[side].push({ id: String(ath.id || ""), name: ath.displayName || ath.shortName, pos: (ath.position || {}).abbreviation || "", starter: !!a.starter,
+                             dnp: !!a.didNotPlay, why: a.reason || "", s: sx });
+      }
+    }
+  }
+  const plays = (s.plays || []).filter(p => p.scoringPlay).map(p => ({ p: (p.period || {}).number || 0, c: (p.clock || {}).displayValue || "", h: +p.homeScore || 0, a: +p.awayScore || 0,
+    t: sideOf[String((p.team || {}).id)] || null, x: String(p.text || "").slice(0, 120) }));
+  return { id: String(id), state: st.state || "pre", completed: !!st.completed, detail: st.shortDetail || st.detail || "", period: (comp.status || {}).period || 0,
+           clock: (comp.status || {}).displayClock || "", date: comp.date || null, teams, players, plays,
+           venue: ((s.gameInfo || {}).venue || {}).fullName || null };
+}
+
 async function matchResult(code, id) {
   const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${code}/summary?event=${id}`, { headers: { "user-agent": "Mozilla/5.0" } });
   if (!r.ok) return null;
@@ -1020,6 +1058,18 @@ export default {
       ctx.waitUntil(caches.default.put(ck, res.clone()));
       return res;
     }
+    if (url.pathname === "/api/bbgame") {                             // v37d: an NBA game's box score, quarters and scoring plays, e.g. ?id=401810001
+      const id = String(url.searchParams.get("id") || "");
+      if (!/^\d{3,12}$/.test(id)) return new Response("not found", { status: 404, headers: CORS });
+      const ck = new Request(`https://kwallo-cache/bbgame-v37d/${id}`), hit = await caches.default.match(ck);
+      if (hit) return hit;
+      const G = await bbGame(id).catch(() => null);
+      if (!G) return new Response(JSON.stringify({ error: "not available" }), { status: 404, headers: { ...CORS, "content-type": "application/json" } });
+      const maxAge = G.completed ? 86400 : G.state === "in" ? 30 : 300;
+      const res = new Response(JSON.stringify(G), { headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": `public, max-age=${maxAge}` } });
+      ctx.waitUntil(caches.default.put(ck, res.clone()));
+      return res;
+    }
     if (url.pathname === "/api/transfers") {                          // v35: a player's transfer history, e.g. ?id=196176
       const id = String(url.searchParams.get("id") || "");
       if (!/^\d{2,12}$/.test(id)) return new Response("not found", { status: 404, headers: CORS });
@@ -1057,5 +1107,5 @@ export default {
     })());
   },
 };
-export { liveScores, findAssist, handleUpdate, maybeDispatch, subscribers, search, liveTick, lineupTick, snapshot, liveMessages, pressureCheck, flushOutbox, adminStats,
+export { bbGame, liveScores, findAssist, handleUpdate, maybeDispatch, subscribers, search, liveTick, lineupTick, snapshot, liveMessages, pressureCheck, flushOutbox, adminStats,
          eventKey, matchResult, transfers, espnCard, pitchapiCard, teamSim, timeline, momentum };

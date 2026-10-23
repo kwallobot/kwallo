@@ -79,7 +79,8 @@ TEAM_COLS = ["game_id", "season", "season_type", "game_date", "game_date_time", 
              "offensive_rebounds", "total_turnovers", "opponent_team_id", "opponent_team_abbreviation", "opponent_team_score"]
 PLAYER_COLS = ["game_id", "season", "season_type", "game_date", "athlete_id", "athlete_display_name", "team_id", "team_abbreviation", "minutes",
                "field_goals_made", "field_goals_attempted", "free_throws_made", "free_throws_attempted", "offensive_rebounds", "defensive_rebounds",
-               "assists", "steals", "blocks", "turnovers", "fouls", "points", "starter", "did_not_play", "athlete_position_abbreviation"]
+               "assists", "steals", "blocks", "turnovers", "fouls", "points", "starter", "did_not_play", "athlete_position_abbreviation",
+               "three_point_field_goals_made", "three_point_field_goals_attempted"]                      # v37d: threes (player props, stats)
 
 
 def load_history(data_dir, seasons):
@@ -90,6 +91,8 @@ def load_history(data_dir, seasons):
         for kind, tag, name, cols, parts in [("team", "espn_nba_team_boxscores", f"team_box_{s}.csv", TEAM_COLS, tparts),
                                               ("player", "espn_nba_player_boxscores", f"player_box_{s}.csv", PLAYER_COLS, pparts)]:
             path = os.path.join(data_dir, "hist", name)
+            if os.path.exists(path) and not set(cols) <= set(pd.read_csv(path, nrows=0).columns):
+                os.remove(path)                                          # v37d: a file kept before a column was added: download it again
             if not os.path.exists(path):
                 try:
                     df = pd.read_csv(f"{HOOPR}/{tag}/{name}", usecols=lambda c: c in cols, low_memory=False)
@@ -118,12 +121,54 @@ def _odds(o):
             "ml_home": dec((o.get("homeTeamOdds") or {}).get("moneyLine")), "ml_away": dec((o.get("awayTeamOdds") or {}).get("moneyLine"))}
 
 
+def _quarters(competitor):
+    """A team's points in each period as text, "33,29,38,25" (overtimes follow), or "" when not played yet."""
+    ls = competitor.get("linescores") or []
+    return ",".join(str(int(float(x.get("value", x.get("displayValue", 0)) or 0))) for x in ls) if ls else ""
+
+
+def quarters_of(text):
+    """'33,29,38,25' -> [33, 29, 38, 25]"""
+    return [int(x) for x in str(text).split(",") if x.strip().lstrip("-").isdigit()] if isinstance(text, str) and text else []
+
+
+def update_past_quarters(data_dir, season, minutes=8.0):
+    """v37d: a past season's scores by quarter, from ESPN's daily scoreboards (about 270 pages, read once and kept)."""
+    path, sp = os.path.join(data_dir, "past_quarters.csv"), os.path.join(data_dir, "past_quarters_state.json")
+    st = json.load(open(sp)) if os.path.exists(sp) else {"days_done": []}
+    old = pd.read_csv(path, dtype={"game_id": str}) if os.path.exists(path) else pd.DataFrame()
+    t0, rows = time.time(), []
+    for d in pd.date_range(f"{season - 1}-10-15", f"{season}-06-30"):
+        key = d.strftime("%Y%m%d")
+        if key in st["days_done"]:
+            continue
+        if time.time() - t0 > minutes * 60:
+            break
+        b = get_json(f"{ESPN}/scoreboard?dates={key}")
+        if b is None:
+            continue
+        for ev in b.get("events", []):
+            c = ev["competitions"][0]
+            cs = {x.get("homeAway"): x for x in c.get("competitors", [])}
+            if "home" in cs and "away" in cs and (ev.get("status", {}).get("type", {}) or {}).get("completed"):
+                rows.append({"game_id": str(ev["id"]), "home_q": _quarters(cs["home"]), "away_q": _quarters(cs["away"])})
+        st["days_done"].append(key)
+    if rows:
+        old = pd.concat([old, pd.DataFrame(rows)], ignore_index=True).drop_duplicates("game_id", keep="last")
+        old.to_csv(path, index=False)
+    json.dump(st, open(sp, "w"))
+    print(f"  last season's scores by quarter: {len(old)} games stored ({len(rows)} added)")
+    return old
+
+
 def update_season(data_dir, today, days_ahead=7):
     """ESPN's scoreboards day by day since 1 October (finished days are cached), plus the next week. Returns every game of
     this season with its status, scores and (for upcoming games) the bookmaker lines first seen."""
     path, sp = os.path.join(data_dir, "season_games.csv"), os.path.join(data_dir, "season_state.json")
     st = json.load(open(sp)) if os.path.exists(sp) else {"days_done": []}
     old = pd.read_csv(path, dtype={"game_id": str, "home_id": str, "away_id": str}) if os.path.exists(path) else pd.DataFrame()
+    if len(old) and "home_q" not in old.columns:
+        st["days_done"] = []                                             # v37d: read again once, for the scores by quarter
     start = pd.Timestamp(f"{season_of(today) - 1}-10-01")
     rows = []
     for d in pd.date_range(start, today + pd.Timedelta(days=days_ahead)):
@@ -147,7 +192,7 @@ def update_season(data_dir, today, days_ahead=7):
                          **{f"{s}_{k}": v for s in ("home", "away") for k, v in {
                              "id": str(cs[s]["team"]["id"]), "abbr": cs[s]["team"].get("abbreviation"), "name": cs[s]["team"].get("displayName"),
                              "short": cs[s]["team"].get("shortDisplayName"), "color": cs[s]["team"].get("color"), "alt": cs[s]["team"].get("alternateColor"),
-                             "score": pd.to_numeric(cs[s].get("score"), errors="coerce")}.items()},
+                             "score": pd.to_numeric(cs[s].get("score"), errors="coerce"), "q": _quarters(cs[s])}.items()},
                          **{f"pre_{k}": v for k, v in o.items()}})
         if all_done and d < today - pd.Timedelta(days=1):
             st["days_done"].append(key)
@@ -169,6 +214,9 @@ def update_season(data_dir, today, days_ahead=7):
 def update_boxes(data_dir, season_games, minutes=6.0):
     """Box scores (team and players) of this season's finished games, read once each from ESPN's game pages."""
     tp, pp = os.path.join(data_dir, "season_team_box.csv"), os.path.join(data_dir, "season_player_box.csv")
+    if os.path.exists(pp) and "three_point_field_goals_made" not in pd.read_csv(pp, nrows=0).columns:
+        for f_ in (tp, pp):                                              # v37d: kept before threes were read: read this season again
+            os.remove(f_) if os.path.exists(f_) else None
     tb = pd.read_csv(tp, dtype={"game_id": str, "team_id": str}) if os.path.exists(tp) else pd.DataFrame()
     pb = pd.read_csv(pp, dtype={"game_id": str, "team_id": str, "athlete_id": str}) if os.path.exists(pp) else pd.DataFrame()
     have = set(tb["game_id"]) if len(tb) else set()
@@ -201,6 +249,8 @@ def update_boxes(data_dir, season_games, minutes=6.0):
                                   "athlete_display_name": (a.get("athlete") or {}).get("displayName"), "minutes": num("minutes"),
                                   "field_goals_made": num("fieldGoalsMade-fieldGoalsAttempted"), "field_goals_attempted": att("fieldGoalsMade-fieldGoalsAttempted"),
                                   "free_throws_made": num("freeThrowsMade-freeThrowsAttempted"), "free_throws_attempted": att("freeThrowsMade-freeThrowsAttempted"),
+                                  "three_point_field_goals_made": num("threePointFieldGoalsMade-threePointFieldGoalsAttempted"),
+                                  "three_point_field_goals_attempted": att("threePointFieldGoalsMade-threePointFieldGoalsAttempted"),
                                   "offensive_rebounds": num("offensiveRebounds"), "defensive_rebounds": num("defensiveRebounds"), "assists": num("assists"),
                                   "steals": num("steals"), "blocks": num("blocks"), "turnovers": num("turnovers"), "fouls": num("fouls"), "points": num("points"),
                                   "starter": bool(a.get("starter")), "did_not_play": bool(a.get("didNotPlay")),
@@ -690,6 +740,313 @@ def gate(bt, cfg, odds):
            if s["model_ll"] > s["naive_ll"] - 0.02 else "waiting for 200 games with bookmaker lines" if s.get("odds_games", 0) < 200
            else "too far behind the bookmakers")
     return {"pass": bool(ok), "why": why, **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in s.items()}}
+
+
+# ---------------------------------------------------------------- v37d: player stat lines and player props
+PROP_STATS = {"pts": ("points", [10, 15, 20, 25, 30, 35, 40]), "reb": ("rebounds", [4, 6, 8, 10, 12, 14, 16]),
+              "ast": ("assists", [2, 4, 6, 8, 10, 12]), "fg3": ("3-pointers", [1, 2, 3, 4, 5, 6])}
+LINE_COLS = ["min", "pts", "reb", "oreb", "dreb", "ast", "stl", "blk", "to", "pf", "fgm", "fga", "fg3", "fg3a", "ftm", "fta"]
+
+
+def player_lines(player_box):
+    """Every player-game with minutes: points, rebounds, assists, steals, blocks, turnovers, fouls and shooting (made / attempted)."""
+    p = player_box
+    num = lambda c: pd.to_numeric(p[c], errors="coerce") if c in p else pd.Series(np.nan, index=p.index)
+    out = pd.DataFrame({"game_id": _ids(p["game_id"]), "team_id": _ids(p["team_id"]), "athlete_id": _ids(p["athlete_id"]),
+                        "name": p["athlete_display_name"], "pos": p["athlete_position_abbreviation"] if "athlete_position_abbreviation" in p else None,
+                        "starter": p["starter"].astype(str).str.lower().eq("true") if "starter" in p else False,
+                        "min": num("minutes"), "pts": num("points"), "oreb": num("offensive_rebounds"), "dreb": num("defensive_rebounds"),
+                        "ast": num("assists"), "stl": num("steals"), "blk": num("blocks"), "to": num("turnovers"), "pf": num("fouls"),
+                        "fgm": num("field_goals_made"), "fga": num("field_goals_attempted"), "fg3": num("three_point_field_goals_made"),
+                        "fg3a": num("three_point_field_goals_attempted"), "ftm": num("free_throws_made"), "fta": num("free_throws_attempted")})
+    out["reb"] = out["oreb"].fillna(0) + out["dreb"].fillna(0)
+    return out[out["min"] > 0].drop_duplicates(["game_id", "athlete_id"], keep="last").reset_index(drop=True)
+
+
+def _team_form(g, values, halflife=15):
+    """(game_id, team_id) -> a team's decayed average of `values` (a dict (game_id, team_id) -> value) over its earlier games,
+    plus each team's latest average (for upcoming games)."""
+    long = pd.concat([g[["game_id", "date", "home_id"]].set_axis(["game_id", "date", "team"], axis=1),
+                      g[["game_id", "date", "away_id"]].set_axis(["game_id", "date", "team"], axis=1)]).sort_values(["team", "date"])
+    long["v"] = [values.get((a, b), np.nan) for a, b in zip(long["game_id"], long["team"])]
+    long["prior"] = long.groupby("team")["v"].transform(lambda s: s.ewm(halflife=halflife, ignore_na=True).mean().shift(1))
+    latest = long.dropna(subset=["v"]).groupby("team")["v"].apply(lambda s: s.ewm(halflife=halflife).mean().iloc[-1]).to_dict()
+    return {(a, b): v for a, b, v in zip(long["game_id"], long["team"], long["prior"])}, latest
+
+
+def prop_table(pl, g, decay=0.95, prior_min=150.0):
+    """For every player-game, what was known before it: the player's rate per minute of each prop statistic (older games fading by 5%
+    a game, pulled towards the league's rate until he has played ~150 minutes), his expected minutes, his average and over-rate in
+    his last 20 games (the simple guess the model must beat), and the game's adjustments: the opponent's defence against that
+    statistic and the pace. Also each player's and team's latest values, for upcoming games."""
+    dates = g.set_index("game_id")["date"]
+    p = pl[pl["game_id"].isin(dates.index)].assign(date=lambda x: x["game_id"].map(dates)).sort_values(["athlete_id", "date"]).reset_index(drop=True)
+    stats = list(PROP_STATS)
+    lg = {s: float(p[s].fillna(0).sum() / p["min"].sum()) for s in stats}
+    vals = {s: p[s].fillna(0).values.astype(float) for s in stats}
+    mins, aid = p["min"].values.astype(float), p["athlete_id"].values
+    rate = {s: np.empty(len(p)) for s in stats}
+    avg20 = {s: np.full(len(p), np.nan) for s in stats}
+    nov20 = {s: np.full(len(p), np.nan) for s in stats}         # how often he went over his own 20-game average line (shrunk to 50%)
+    em, nprev = np.empty(len(p)), np.zeros(len(p))
+    hist = {s: [] for s in stats}
+    S = {s: 0.0 for s in stats}; sm = 0.0; e = None; prev = None; n = 0
+    now = {}
+    def snap():
+        return {**{s: (S[s] + lg[s] * prior_min) / (sm + prior_min) for s in stats}, "em": e, "n": n}
+    for i in range(len(p)):
+        if aid[i] != prev:
+            if prev is not None:
+                now[prev] = snap()
+            S = {s: 0.0 for s in stats}; sm = 0.0; e = None; prev = aid[i]; n = 0; hist = {s: [] for s in stats}
+        for s in stats:
+            rate[s][i] = (S[s] + lg[s] * prior_min) / (sm + prior_min)
+            if hist[s]:
+                h20 = hist[s][-20:]
+                avg20[s][i] = a_ = float(np.mean(h20))
+                ln_ = math.floor(a_) + 0.5
+                nov20[s][i] = (sum(v > ln_ for v in h20) + 1) / (len(h20) + 2)
+        em[i] = e if e is not None else 15.0
+        nprev[i] = n
+        for s in stats:
+            S[s] = decay * S[s] + vals[s][i]; hist[s].append(vals[s][i])
+        sm = decay * sm + mins[i]
+        e = mins[i] if e is None else 0.75 * e + 0.25 * mins[i]
+        n += 1
+    if prev is not None:
+        now[prev] = snap()
+    for s in stats:
+        p[f"rate_{s}"], p[f"avg20_{s}"], p[f"nov20_{s}"] = rate[s], avg20[s], nov20[s]
+    p["em"], p["nprev"] = em, nprev
+    # the opponent's defence against each statistic, and the pace
+    tot = p.groupby(["game_id", "team_id"])[stats].sum()
+    opp_of = {}
+    for x in g[["game_id", "home_id", "away_id"]].itertuples(index=False):
+        opp_of[(x.game_id, x.home_id)] = x.away_id; opp_of[(x.game_id, x.away_id)] = x.home_id
+    team_adj = {"latest": {}}
+    for s in stats:
+        allowed = {(gid, opp_of[(gid, tid)]): v for (gid, tid), v in tot[s].items() if (gid, tid) in opp_of}
+        prior, latest = _team_form(g, allowed)
+        mean_ = float(np.nanmean(list(allowed.values())))
+        p[f"opp_{s}"] = [np.clip((prior.get((gid, opp_of.get((gid, tid))), np.nan) or np.nan) / mean_, 0.8, 1.2) for gid, tid in zip(p["game_id"], p["team_id"])]
+        p[f"opp_{s}"] = p[f"opp_{s}"].fillna(1.0)
+        team_adj["latest"][s] = {t: float(np.clip(v / mean_, 0.8, 1.2)) for t, v in latest.items()}
+    poss = {(x.game_id, t): x.poss for x in g[["game_id", "home_id", "away_id", "poss"]].itertuples(index=False) for t in (x.home_id, x.away_id)}
+    pprior, platest = _team_form(g, poss)
+    lg_pace = float(g["poss"].mean())
+    p["pace_f"] = [((pprior.get((gid, tid), lg_pace) or lg_pace) + (pprior.get((gid, opp_of.get((gid, tid))), lg_pace) or lg_pace)) / 2 / lg_pace
+                   for gid, tid in zip(p["game_id"], p["team_id"])]
+    p["pace_f"] = p["pace_f"].fillna(1.0)
+    team_adj["pace"] = {t: float(v / lg_pace) for t, v in platest.items()}
+    for s in stats:
+        p[f"mu_{s}"] = p[f"rate_{s}"] * p["em"] * p[f"opp_{s}"] * p["pace_f"]
+    return p, now, team_adj
+
+
+def _nb_over(mu, r, t):
+    """Chance of t or more (a count with mean mu and negative-binomial spread r)."""
+    from scipy.stats import nbinom
+    mu = np.maximum(np.asarray(mu, float), 1e-6)
+    return 1 - nbinom.cdf(np.asarray(t) - 1, r, r / (r + mu))
+
+
+def _calib(p, y, bins=10):
+    """Average gap between the chances given and how often it happened (by tenths), weighted by how many fall in each."""
+    p, y = np.asarray(p, float), np.asarray(y, float)
+    idx = np.minimum((p * bins).astype(int), bins - 1)
+    gap = 0.0
+    for b in range(bins):
+        m = idx == b
+        if m.sum():
+            gap += abs(p[m].mean() - y[m].mean()) * m.sum()
+    return float(gap / max(len(p), 1))
+
+
+def prop_fit(pt, start, end, log=print):
+    """The weekly test for player props, on last season's rotation players (10+ earlier games, 15+ expected minutes), counting only
+    games they played (as bookmakers settle props). For each statistic: the spread that fits best, then the chances at the
+    player's own recent average (vs the simple guess: how often he went over it in his last 20 games) and the calibration of every
+    ladder step (10+, 15+ points...). Published when it beats the simple guess and its chances come true as often as they say."""
+    from scipy.stats import nbinom
+    x_all = pt[(pt["date"] >= start) & (pt["date"] <= end) & (pt["nprev"] >= 10) & (pt["em"] >= 15)]
+    split = pd.Timestamp(f"{end.year}-02-01")                        # tuned on the games before 1 February, judged on the games after
+    tr, x = x_all[x_all["date"] < split], x_all[x_all["date"] >= split]
+    out = {}
+    for s, (label, ladder) in PROP_STATS.items():
+        yt, mt = tr[s].fillna(0).values, np.maximum(tr[f"mu_{s}"].values, 0.05)
+        k = float(yt.sum() / mt.sum()) if mt.sum() > 0 else 1.0       # the statistic's overall level, corrected on the tuning games
+        best = None
+        for r in (1, 2, 3, 5, 8, 12, 20, 40, 100):
+            ll = float(-nbinom.logpmf(yt.astype(int), r, r / (r + k * mt)).mean())
+            if best is None or ll < best[0]:
+                best = (ll, r)
+        r = best[1]
+        y, mu = x[s].fillna(0).values, np.maximum(k * x[f"mu_{s}"].values, 0.05)
+        line = np.floor(x[f"avg20_{s}"].values) + 0.5
+        ok = np.isfinite(line)
+        over = (y > line).astype(float)
+        pm = np.clip(_nb_over(mu, r, np.where(ok, np.floor(line) + 1, 1)), 1e-4, 1 - 1e-4)
+        # the simple guess: how often he went over that line in his last 20 games (shrunk a little towards 50%)
+        pn = np.clip(x[f"nov20_{s}"].fillna(0.5).values, 1e-4, 1 - 1e-4)
+        llm = float(-(over[ok] * np.log(pm[ok]) + (1 - over[ok]) * np.log(1 - pm[ok])).mean())
+        lln = float(-(over[ok] * np.log(pn[ok]) + (1 - over[ok]) * np.log(1 - pn[ok])).mean())
+        lp, ly = [], []
+        for t in ladder:
+            pr = _nb_over(mu, r, t)
+            keep = (pr >= 0.05) & (pr <= 0.95)
+            lp.append(pr[keep]); ly.append((y[keep] >= t).astype(float))
+        cal = _calib(np.concatenate(lp), np.concatenate(ly)) if lp else 1.0
+        passed = bool(llm <= lln - 0.003 and cal <= 0.02)
+        out[s] = {"pass": passed, "r": r, "k": round(k, 4), "ll": round(llm, 4), "naive_ll": round(lln, 4), "calib": round(cal, 4), "n": int(ok.sum())}
+        log(f"  props, {label}: {int(ok.sum())} player-games; at each player's own average, log loss {llm:.4f} vs the simple guess's {lln:.4f}; "
+            f"chances off by {cal:.3f} on average -> {'published' if passed else 'not published'}")
+    return out
+
+
+def prop_ladders(now_p, team_adj, s_cfg, opp, team, em_adj):
+    """Upcoming game: one player's expected statistics and ladder chances (only statistics that passed their test)."""
+    res = {}
+    for s, (label, ladder) in PROP_STATS.items():
+        c = (s_cfg or {}).get(s) or {}
+        if not c.get("pass"):
+            continue
+        mu = c.get("k", 1.0) * now_p[s] * em_adj * team_adj["latest"][s].get(opp, 1.0) * ((team_adj["pace"].get(team, 1.0) + team_adj["pace"].get(opp, 1.0)) / 2)
+        steps = [[t, float(_nb_over(mu, c["r"], t))] for t in ladder]
+        steps = [st for st in steps if 0.05 <= st[1] <= 0.95][:5]
+        if steps:
+            res[s] = {"mean": round(float(mu), 1), "ladder": steps}
+    return res
+
+
+# ---------------------------------------------------------------- v37d: halves and quarters
+def _qarrays(bt, pq):
+    x = bt.merge(pq, on="game_id", how="inner")
+    H = [quarters_of(v)[:4] for v in x["home_q"]]; A = [quarters_of(v)[:4] for v in x["away_q"]]
+    ok = np.array([len(h) == 4 and len(a) == 4 for h, a in zip(H, A)])
+    x = x[ok].reset_index(drop=True)
+    return x, np.array([h for h, k in zip(H, ok) if k], float), np.array([a for a, k in zip(A, ok) if k], float)
+
+
+def _three_way(mu, sd):
+    """Home win / tie / away win of a period whose margin is about normal (mean mu, spread sd), scores being whole numbers."""
+    pa = norm.cdf((-0.5 - mu) / sd); ph = 1 - norm.cdf((0.5 - mu) / sd)
+    return np.c_[ph, np.clip(1 - ph - pa, 1e-4, 1), pa]
+
+
+def quarter_fit(bt, pq, log=print):
+    """The weekly test for halves and quarters on last season: each quarter's margin and points as shares of the game's predicted
+    margin and total (fitted on the games before 1 February, tested on the games after). Markets: the 1st half's and the 1st
+    quarter's winner (a tie is possible) and points, and which quarter scores most. Each published when it beats the simple guess
+    (how often each outcome happened in the fitting games) and its chances come true as often as they say."""
+    x, H, A = _qarrays(bt, pq)
+    if len(x) < 400:
+        log(f"  quarters: only {len(x)} games with scores by quarter; not tested yet")
+        return {"tested": False}
+    fit_ = (x["date"] < pd.Timestamp(f"{int(x['date'].dt.year.max())}-02-01")).values
+    m, T = x["margin"].values, x["total"].values
+    P = {}
+    for k in range(4):
+        mq, tq = H[:, k] - A[:, k], H[:, k] + A[:, k]
+        w = float((m[fit_] @ mq[fit_]) / (m[fit_] @ m[fit_])); sdm = float(np.std(mq[fit_] - w * m[fit_]))
+        sh = float((T[fit_] @ tq[fit_]) / (T[fit_] @ T[fit_])); sdt = float(np.std(tq[fit_] - sh * T[fit_]))
+        P[f"q{k + 1}"] = {"w": w, "sdm": sdm, "s": sh, "sdt": sdt}
+    mh, th = (H[:, 0] + H[:, 1]) - (A[:, 0] + A[:, 1]), H[:, 0] + H[:, 1] + A[:, 0] + A[:, 1]
+    w = float((m[fit_] @ mh[fit_]) / (m[fit_] @ m[fit_])); sh = float((T[fit_] @ th[fit_]) / (T[fit_] @ T[fit_]))
+    P["h1"] = {"w": w, "sdm": float(np.std(mh[fit_] - w * m[fit_])), "s": sh, "sdt": float(np.std(th[fit_] - sh * T[fit_]))}
+    te = ~fit_
+    tests = {}
+    def judge(name, label, pm, outcome_idx, naive_p):
+        pm = np.clip(pm[te], 1e-4, 1); o = outcome_idx[te]; nv = np.clip(np.tile(naive_p, (te.sum(), 1)), 1e-4, 1)
+        llm = float(-np.log(pm[np.arange(len(o)), o]).mean()); lln = float(-np.log(nv[np.arange(len(o)), o]).mean())
+        Y = np.zeros_like(pm); Y[np.arange(len(o)), o] = 1
+        cal = _calib(pm.ravel(), Y.ravel())
+        passed = bool(llm <= lln - 0.003 and cal <= 0.03)
+        tests[name] = {"pass": passed, "ll": round(llm, 4), "naive_ll": round(lln, 4), "calib": round(cal, 4), "n": int(te.sum())}
+        log(f"  {label}: log loss {llm:.4f} vs the simple guess's {lln:.4f}; chances off by {cal:.3f} -> {'published' if passed else 'not published'}")
+    for key, label, mq in (("h1", "1st half winner", mh), ("q1", "1st quarter winner", H[:, 0] - A[:, 0])):
+        pm = _three_way(P[key]["w"] * m, P[key]["sdm"])
+        o = np.where(mq > 0, 0, np.where(mq == 0, 1, 2))
+        judge(f"{key}_winner", label, pm, o, np.bincount(o[fit_], minlength=3) / fit_.sum())
+    for key, label, tq in (("h1", "1st half points", th), ("q1", "1st quarter points", H[:, 0] + A[:, 0])):
+        L0 = float(np.floor(np.mean(tq[fit_]))) + 0.5                      # one fixed line: the season's usual figure
+        po = 1 - norm.cdf((L0 - P[key]["s"] * T) / P[key]["sdt"])
+        o = (tq < L0).astype(int)                                           # 0 = over, 1 = under
+        judge(f"{key}_total", label, np.c_[po, 1 - po], o, np.array([np.mean(tq[fit_] > L0), np.mean(tq[fit_] < L0)]))
+    qt = H + A
+    sims = _top_quarter(P, T)
+    o = np.argmax(qt + np.random.default_rng(0).uniform(0, 0.01, qt.shape), axis=1)   # (a tie goes to either, at random)
+    judge("top_quarter", "highest-scoring quarter", sims, o, np.bincount(o[fit_], minlength=4) / fit_.sum())
+    return {"tested": True, "params": P, "tests": tests}
+
+
+def _top_quarter(P, T, n=4000, seed=1):
+    """Chance that each quarter scores most, from the four quarters' expected points and spreads (simulated)."""
+    rng = np.random.default_rng(seed)
+    T = np.atleast_1d(np.asarray(T, float))
+    mus = np.stack([P[f"q{k}"]["s"] * T for k in range(1, 5)], axis=1)
+    sds = np.array([P[f"q{k}"]["sdt"] for k in range(1, 5)])
+    out = np.zeros((len(T), 4))
+    for i0 in range(0, len(T), 200):
+        mu_ = mus[i0:i0 + 200]
+        d = mu_[:, None, :] + rng.normal(0, 1, (len(mu_), n, 4)) * sds
+        out[i0:i0 + 200] = np.stack([(d.argmax(axis=2) == k).mean(axis=1) for k in range(4)], axis=1)
+    return out
+
+
+def quarter_markets(qcfg, margin, total):
+    """Upcoming game: the markets that passed their test (chances for home / tie / away, and over / under at lines near Kwallo's figure)."""
+    if not (qcfg or {}).get("tested"):
+        return {}
+    P, T, res = qcfg["params"], qcfg.get("tests", {}), {}
+    for key, name in (("h1", "1st half"), ("q1", "1st quarter")):
+        if T.get(f"{key}_winner", {}).get("pass"):
+            ph, pd_, pa = _three_way(np.array([P[key]["w"] * margin]), P[key]["sdm"])[0]
+            res[f"{key}_winner"] = {"name": f"{name} winner", "home": float(ph), "tie": float(pd_), "away": float(pa)}
+        if T.get(f"{key}_total", {}).get("pass"):
+            mu = P[key]["s"] * total
+            base = math.floor(mu) + 0.5
+            res[f"{key}_total"] = {"name": f"{name} points", "expected": round(mu, 1),
+                                   "lines": [[base + d, float(1 - norm.cdf((base + d - mu) / P[key]["sdt"]))] for d in ((-6, -3, 0, 3, 6) if key == "h1" else (-4, -2, 0, 2, 4))]}
+    if T.get("top_quarter", {}).get("pass"):
+        res["top_quarter"] = {"name": "Highest-scoring quarter", "p": [float(v) for v in _top_quarter(P, [total])[0]]}
+    return res
+
+
+# ---------------------------------------------------------------- v37d: live chances
+def live_chance(lead, f, margin, sd, c, a=0.5):
+    """Home side's chance with `lead` points and a fraction `f` of regulation still to play: the pre-game margin for the time
+    left, its spread shrinking as the time left runs down (sd x c x f^a; c and a learned on last season)."""
+    f = np.maximum(np.asarray(f, float), 1e-4)
+    return norm.cdf((np.asarray(lead, float) + np.asarray(margin, float) * f) / (sd * f ** a * c))
+
+
+def live_fit(bt, pq, sd_margin, log=print):
+    """The test for live chances on last season: the score after the 1st quarter, at half-time and after the 3rd quarter of every
+    game. Published when the chances come true as often as they say (and, as a check, beat the pre-game chances)."""
+    x, H, A = _qarrays(bt, pq)
+    if len(x) < 400:
+        log("  live chances: not enough games with scores by quarter yet")
+        return {"pass": False}
+    won = (x["hs"] > x["as"]).astype(float).values
+    lead = np.cumsum(H - A, axis=1)[:, :3]
+    fs = np.array([0.75, 0.5, 0.25])
+    L, F = lead.ravel(), np.tile(fs, len(x))
+    M, Y = np.repeat(x["margin"].values, 3), np.repeat(won, 3)
+    best = None
+    for a in (0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6):
+        for c in np.arange(0.6, 2.51, 0.05):
+            p = np.clip(live_chance(L, F, M, sd_margin, c, a), 1e-4, 1 - 1e-4)
+            ll = float(-(Y * np.log(p) + (1 - Y) * np.log(1 - p)).mean())
+            if best is None or ll < best[0]:
+                best = (ll, float(c), p, a)
+    ll, c, p, a = best
+    pre = np.clip(norm.cdf(M / sd_margin), 1e-4, 1 - 1e-4)
+    ll_pre = float(-(Y * np.log(pre) + (1 - Y) * np.log(1 - pre)).mean())
+    cal = _calib(p, Y)
+    passed = bool(cal <= 0.03 and ll < ll_pre)
+    log(f"  live chances: {len(L)} game moments; log loss {ll:.4f} (pre-game chances alone {ll_pre:.4f}); chances off by {cal:.3f} -> "
+        f"{'published' if passed else 'not published'}")
+    return {"pass": passed, "c": round(c, 3), "a": a, "ll": round(ll, 4), "pre_ll": round(ll_pre, 4), "calib": round(cal, 4), "n": int(len(L))}
 
 
 LIVE_MIN = 150                 # v37b: real pre-game predictions needed before the live record decides
