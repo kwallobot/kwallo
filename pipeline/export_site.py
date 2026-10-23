@@ -102,6 +102,26 @@ def export(ns, data_dir, mode):
                              "coach": {s_: ((xi.get(s_) or {}).get("coach") or (ns.get("COACH_OF") or {}).get(t_)) for s_, t_ in (("home", k[2]), ("away", k[3]))}})
         for t in (k[2], k[3]):
             teams.setdefault(slug(t), {"slug": slug(t), "name": t, "league": k[0], "league_slug": slug(k[0])})
+    # v37c: the leagues still waiting for their backtest: the match, kick-off, ESPN id (live scores, lineups, stats), form and
+    #       head-to-head, but no chances, angles, markets or scorers ("held": the app says the chances are still being tested)
+    held = ns.get("HELD_FIXTURES")
+    for r in (held.itertuples() if held is not None and len(held) else []):
+        k = (r.Competition, str(r.Date)[:10], r.Home, r.Away)
+        ms = f"{k[1]}-{slug(k[2])}-v-{slug(k[3])}"
+        if ms in details:
+            continue
+        row = clean({"Competition": k[0], "Group": getattr(r, "Group", None), "Date": r.Date, "Home": k[2], "Away": k[3], "held": True,
+                     "slug": ms, "kickoff": kick.get(k), "league_slug": slug(k[0]), "home_slug": slug(k[2]), "away_slug": slug(k[3]),
+                     "espn": dict(zip(["code", "id"], espn_ids[k])) if k in espn_ids else None,
+                     "badges": {s_: {"c": ((P.get("team_style") or {}).get(t_) or {}).get("color"), "a": ((P.get("team_style") or {}).get(t_) or {}).get("abbr")}
+                                for s_, t_ in (("home", k[2]), ("away", k[3]))}})
+        matches.append({x: row.get(x) for x in ["slug", "Competition", "league_slug", "Date", "kickoff", "Home", "Away", "home_slug", "away_slug", "espn", "badges", "held"]})
+        details[ms] = clean({"match": row, "verdict": None, "markets": None, "expected_xi": {}, "last_time": None, "scorers": None,
+                             "trends": {"home": (P.get("trends") or {}).get(k[2]), "away": (P.get("trends") or {}).get(k[3])},
+                             "team_style": {t: (P.get("team_style") or {}).get(t) for t in (k[2], k[3])}, "h2h": h2h(k[2], k[3]),
+                             "coach": {s_: (ns.get("COACH_OF") or {}).get(t_) for s_, t_ in (("home", k[2]), ("away", k[3]))}})
+        for t in (k[2], k[3]):
+            teams.setdefault(slug(t), {"slug": slug(t), "name": t, "league": k[0], "league_slug": slug(k[0])})
     idx_path = os.path.join(site_dir, "index.json")
     if mode == "lineups" and os.path.exists(idx_path):              # keep matches this quick run didn't recompute
         old = json.load(open(idx_path))
@@ -117,7 +137,7 @@ def export(ns, data_dir, mode):
     files = {"site/index.json": {"meta": meta, "matches": matches}, "site/teams.json": sorted(teams.values(), key=lambda t: t["name"]),
              "site/schedule.json": [{"slug": m["slug"], "kickoff": m["kickoff"], "date": m["Date"][:10], "competition": m["Competition"],
                                      "league_slug": m["league_slug"], "home_slug": m["home_slug"], "away_slug": m["away_slug"], "espn": m.get("espn"),
-                                     "pH": m.get("pH"), "pD": m.get("pD"), "pA": m.get("pA"),
+                                     "pH": m.get("pH"), "pD": m.get("pD"), "pA": m.get("pA"), "held": bool(m.get("held")),   # v37c: no bot alerts
                                      "home": m["Home"], "away": m["Away"]} for m in matches]}
     for ms, d in details.items():
         files[f"site/match/{ms}.json"] = d

@@ -77,10 +77,10 @@
     const left = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2);
     if (smooth && bar.scrollTo) bar.scrollTo({ left, behavior: "smooth" }); else bar.scrollLeft = left;
   }
-  function dayTabsInView(day) {                                     // the chosen day in view, sliding from where the row was before a swipe
+  function dayTabsInView(day, warm) {                               // the chosen day in view, sliding from where the row was before a swipe
     const bar = shell.querySelector("[data-daytabs]"), b = bar && bar.querySelector("button.on");
     if (bar && dayBarX != null) { bar.scrollLeft = dayBarX; dayBarX = null; centreIn(bar, b, true); } else centreIn(bar, b, false);
-    [-1, 1].forEach(s => { const d = new Date(day + "T12:00:00"); d.setDate(d.getDate() + s); warmDay(localDay(d)); });   // the days either side, ready for a swipe
+    if (warm !== false) [-1, 1].forEach(s => { const d = new Date(day + "T12:00:00"); d.setDate(d.getDate() + s); warmDay(localDay(d)); });   // the days either side, ready for a swipe
   }
   const warmDay = d => { if (d >= PAST_FROM && d < localDay(Date.now())) get(`days/${d}.json`).catch(() => {}); };
 
@@ -101,13 +101,15 @@
   }
   // a ★ beside each team's name: tap to add that team to favourites (the row itself opens the match)
   const teamStar = (slug, name) => slug ? `<button class="star small-star ${fav.has("team:" + slug) ? "on" : ""}" data-fav="team:${esc(slug)}" aria-label="Favourite ${esc(name)}" title="Favourite ${esc(name)}">★</button>` : "";
+  // v37c: a league still waiting for its backtest shows its matches without Kwallo's chances
+  const heldNote = comp => `<p class="small muted held-note">Kwallo's chances for ${esc(comp || "this league")} are still being tested against past seasons and the bookmakers, so they're not shown yet. Scores, lineups and statistics are live.</p>`;
   function matchRow(m) {
     const t = liveCell(m), mk = "match:" + m.slug;
-    const line = (side, name, p, sc) => `<span class="mt">${badge(m, side)}<span class="tn">${esc(name)}</span>${sc != null ? `<b class="msc">${sc}</b>` : `<span class="mp num">${pct(p)}</span>`}</span>`;
+    const line = (side, name, p, sc) => `<span class="mt">${badge(m, side)}<span class="tn">${esc(name)}</span>${sc != null ? `<b class="msc">${sc}</b>` : m.held ? "" : `<span class="mp num">${pct(p)}</span>`}</span>`;
     return `<a class="mrow ${t.live ? "is-live" : ""}" href="#/match/${esc(m.slug)}">
       <span class="mtime num">${t.top}<span class="muted">${t.hs != null ? "" : "–"}</span></span>
       <span class="mteams">${line("home", m.Home, m.pH, t.hs)}${line("away", m.Away, m.pA, t.as)}
-        <span class="md small muted">Draw ${pct(m.pD)}${m.top_pick ? `, top angle: ${esc(m.top_pick.Bet)} ${pct(m.top_pick.p)}` : ""}</span></span>
+        <span class="md small muted">${m.held ? "Chances still being tested" : `Draw ${pct(m.pD)}${m.top_pick ? `, top angle: ${esc(m.top_pick.Bet)} ${pct(m.top_pick.p)}` : ""}`}</span></span>
       <button class="star mstar ${fav.has(mk) ? "on" : ""}" data-fav="${esc(mk)}" aria-label="Favourite this match">★</button>
     </a>`;
   }
@@ -139,7 +141,15 @@
   }
   function formChips(form) { return `<span class="form">${String(form || "").split("").filter(r => "WDL".includes(r)).map(r => `<b class="${r}">${r}</b>`).join("")}</span>`; }
   const empty = msg => `<p class="empty">${msg}</p>`;
-  function setNav(name) { document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("on", a.dataset.nav === name)); }
+  function setNav(name) {
+    // v37c: the first tab is "Matches" (football) or "Games" (basketball), and it and Leagues reopen the sport viewed last
+    const bb = store.get("sport", "fb") === "bb";
+    document.querySelectorAll("[data-nav]").forEach(a => {
+      a.classList.toggle("on", a.dataset.nav === name);
+      if (a.dataset.nav === "today") { a.textContent = bb ? "Games" : "Matches"; a.setAttribute("href", bb ? "#/bb" : "#/"); }
+      if (a.dataset.nav === "leagues") a.setAttribute("href", bb ? "#/bb/leagues" : "#/leagues");
+    });
+  }
 
   // ---------- v35: the Worker's other endpoints (past matches, transfers), links to players, the back button, team averages
   const workerApi = p => (C.api || "/api/site/").replace(/\/api\/site\/?$/, "/api/" + p);
@@ -153,7 +163,7 @@
   const slugify = s => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   const playerHref = (teamSlug, name, id) => `#/pf/${encodeURIComponent(teamSlug || "-")}/${encodeURIComponent(id || "-")}/${encodeURIComponent(name || "")}`;
   const resultHref = e => `#/result/${encodeURIComponent(e)}`;
-  const backBar = () => `<p class="backbar"><a class="back" href="#/" aria-label="Back to today's matches">‹ Back</a></p>`;
+  const backBar = () => `<p class="backbar"><a class="back" href="#/" aria-label="Back to the matches">‹ Back</a></p>`;
   const f1 = x => (x == null || !isFinite(x) ? "–" : Number(x).toFixed(1));
   const AVG_ROWS = [["GF", "GA", "Goals"], ["xGF", "xGA", "Expected goals (xG)"], ["ShotsF", "ShotsA", "Shots"], ["SOTF", "SOTA", "Shots on target"],
     ["CornersF", "CornersA", "Corners"], ["CardsF", "CardsA", "Cards (a red counts 2)"], ["FoulsF", "FoulsA", "Fouls"], ["TacklesF", "TacklesA", "Tackles"],
@@ -215,6 +225,7 @@
     const order = Object.keys(groups).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
     const f = (k, l) => `<button class="chip ${filter === k ? "on" : ""}" data-go="#/day/${day}/${k}">${l}</button>`;
     app.innerHTML = `<div id="dayroot" hidden data-day="${day}" data-filter="${esc(filter)}" data-max="${days[days.length - 1]}"></div>
+      ${sportSwitch("fb", "#/", "#/bb")}
       <h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} match${list.length === 1 ? "" : "es"}.</p>
       <div class="daybar"><div class="tabs" role="tablist" data-daytabs>${dayTabs}</div>${picker}</div>
       <div class="tabs">${f("all", "All")}${f("live", `● Live${Object.values(LIVE).some(x => x.state === "in") ? ` (${ms.filter(m => (LIVE[m.slug] || {}).state === "in").length})` : ""}`)}${f("big", "Big games")}${f("europe", "Europe")}${f("nigeria", "Nigeria")}${f("fav", "★ Favourites")}</div>
@@ -250,6 +261,7 @@
     const f = (k, l) => `<button class="chip ${filter === k ? "on" : ""}" data-go="#/day/${day}/${k}">${l}</button>`;
     const maxDay = (picker.match(/max="([\d-]+)"/) || [])[1] || day;
     app.innerHTML = `<div id="dayroot" hidden data-day="${day}" data-filter="${esc(filter)}" data-max="${maxDay}"></div>
+      ${sportSwitch("fb", "#/", "#/bb")}
       <h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${list.length} result${list.length === 1 ? "" : "s"}.</p>
       <div class="daybar"><div class="tabs" role="tablist" data-daytabs>${dayTabs}</div>${picker}</div>
       <div class="tabs">${f("all", "All")}${f("big", "Big games")}${f("europe", "Europe")}${f("nigeria", "Nigeria")}${f("fav", "★ Favourites")}</div>
@@ -265,7 +277,7 @@
     const comps = await get("competitions.json");
     const groups = {};
     comps.forEach(c => (groups[c.group_name || "Other"] = groups[c.group_name || "Other"] || []).push(c));
-    app.innerHTML = `<h1>Leagues</h1><p><a href="#/leaders">Player leaders by competition</a></p>` + Object.entries(groups).map(([g, cs]) => `<h2 class="grp">${esc(g)}</h2>
+    app.innerHTML = `${sportSwitch("fb", "#/leagues", "#/bb/leagues")}<h1>Leagues</h1><p><a href="#/leaders">Player leaders by competition</a></p>` + Object.entries(groups).map(([g, cs]) => `<h2 class="grp">${esc(g)}</h2>
       ${cs.map(c => compCard("lg:" + c.slug, c.name, REGION[c.name], c.upcoming || null, `<div class="lg-body" data-lg="${esc(c.slug)}"><p class="muted small">Loading…</p></div>`, true)).join("")}`).join("");
     document.querySelectorAll ? setTimeout(() => shell.querySelectorAll(".card:not(.folded) [data-lg]").forEach(fillLeague), 0) : 0;
   }
@@ -276,9 +288,9 @@
     let c; try { c = await get(`comp/${slug}.json`); } catch (e) { el.innerHTML = empty("Not available yet."); return; }
     const r = (c.rounds || []).find(x => x.round === c.current_round) || (c.rounds || []).slice(-1)[0];
     const fx = r ? r.matches.slice(0, 10).map(m => `<li class="num small">${esc(m.date)}: <a href="#/team/${esc(m.home_slug)}">${esc(m.home)}</a> ${m.played ? `<b>${esc(m.score)}</b>` : "v"}
-        <a href="#/team/${esc(m.away_slug)}">${esc(m.away)}</a>${m.slug ? ` <a href="#/match/${esc(m.slug)}">Prediction</a>` : ""}</li>`).join("") : "";
+        <a href="#/team/${esc(m.away_slug)}">${esc(m.away)}</a>${m.slug ? ` <a href="#/match/${esc(m.slug)}">${c.held ? "Match" : "Prediction"}</a>` : ""}</li>`).join("") : "";
     const tb = (c.table || []).slice(0, 5).map(x => `<tr><td class="num">${x.pos}</td><td><a href="#/team/${esc(x.team_slug)}">${esc(x.team)}</a></td><td class="r num">${x.P}</td><td class="r num"><b>${x.Pts}</b></td></tr>`).join("");
-    el.innerHTML = `${r ? `<h3>${esc(roundTitle(r))}</h3><ul class="list">${fx}</ul>` : ""}
+    el.innerHTML = `${c.held ? heldNote(c.name) : ""}${r ? `<h3>${esc(roundTitle(r))}</h3><ul class="list">${fx}</ul>` : ""}
       ${tb ? `<h3>Table</h3><div class="wrap"><table><thead><tr><th>#</th><th>Team</th><th class="r">P</th><th class="r">Pts</th></tr></thead><tbody>${tb}</tbody></table></div>` : ""}
       <p class="links"><a href="#/comp/${esc(slug)}/table">Full table</a> <a href="#/comp/${esc(slug)}/matches">All matchdays</a> <a href="#/comp/${esc(slug)}/leaders">Leaders</a>
         <button class="star ${fav.has("comp:" + slug) ? "on" : ""}" data-fav="comp:${esc(slug)}" aria-label="Favourite ${esc(c.name)}">★</button></p>`;
@@ -300,7 +312,7 @@
       roundBar = r ? `<div class="tabs rounds" data-rounds>${rounds.map(x => `<button class="${x.round === r.round ? "on" : ""}" data-go="#/comp/${slug}/matches/${encodeURIComponent(x.round)}" aria-label="${esc(roundTitle(x))}">${esc(x.name || x.round)}</button>`).join("")}</div>` : "";
       body = r ? `<h2>${esc(roundTitle(r))}</h2><ul class="list">${r.matches.map(m => `<li class="num">${esc(m.date)}:
           ${teamStar(m.home_slug, m.home)}<a href="#/team/${esc(m.home_slug)}">${esc(m.home)}</a> ${m.played ? `<b>${esc(m.score)}</b>` : "v"} <a href="#/team/${esc(m.away_slug)}">${esc(m.away)}</a>${teamStar(m.away_slug, m.away)}
-          ${m.slug ? ` <a class="small" href="#/match/${esc(m.slug)}">Prediction</a>` : ""}</li>`).join("")}</ul>` : empty("No matchdays yet.");
+          ${m.slug ? ` <a class="small" href="#/match/${esc(m.slug)}">${c.held ? "Match" : "Prediction"}</a>` : ""}</li>`).join("")}</ul>` : empty("No matchdays yet.");
     } else if (tab === "table") {
       body = (c.table || []).length ? `<div class="wrap"><table><thead><tr><th>#</th><th>Team</th><th class="r">P</th><th class="r">W</th><th class="r">D</th><th class="r">L</th><th class="r">GD</th><th class="r">Pts</th><th>Form</th></tr></thead><tbody>
         ${c.table.map(x => `<tr><td class="num">${x.pos}</td><td><a href="#/team/${esc(x.team_slug)}">${esc(x.team)}</a></td><td class="r num">${x.P}</td><td class="r num">${x.W}</td><td class="r num">${x.D}</td>
@@ -311,7 +323,7 @@
     }
     // v35: the competition's name, season, tabs and matchday numbers stay pinned under the header while scrolling
     app.innerHTML = `<div class="compbar"><h1 class="title-row"><span>${esc(c.name)}${c.season ? ` <small class="muted season">${esc(fmtSeason(c.season))}</small>` : ""}</span><button class="star ${fav.has("comp:" + slug) ? "on" : ""}" data-fav="comp:${esc(slug)}" aria-label="Favourite ${esc(c.name)}" title="Favourite">★</button></h1>
-      <div class="tabs">${t("matches", "Matchdays")}${t("table", "Table")}${t("leaders", "Leaders")}</div>${roundBar}</div>${body}`;
+      <div class="tabs">${t("matches", "Matchdays")}${t("table", "Table")}${t("leaders", "Leaders")}</div>${roundBar}</div>${c.held ? heldNote(c.name) : ""}${body}`;
     afterRender = () => { const b = shell.querySelector("[data-rounds] button.on"), bar = shell.querySelector("[data-rounds]"); if (b && bar) bar.scrollLeft = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2); };
     hit("competition");
   }
@@ -673,7 +685,9 @@
     const hasStats = hasEv && started;
     const ko = m.kickoff ? Date.parse(m.kickoff) : null;
     const sheetSoon = hasEv && (started || (ko != null && ko - Date.now() < 3 * 3600000));      // the team sheet can be out: read it live
-    const TABS_ = hasStats ? [TABS[0], ["stats", L0.state === "in" ? "● Stats" : "Stats"], ...TABS.slice(1)] : TABS;
+    const held = !!m.held;                                           // v37c: a league still waiting for its backtest: no chances, verdict or markets
+    const TABS_ = (hasStats ? [TABS[0], ["stats", L0.state === "in" ? "● Stats" : "Stats"], ...TABS.slice(1)] : TABS)
+      .filter(([k]) => !held || !["verdict", "markets", "goals"].includes(k));
     tab = TABS_.some(([k]) => k === tab) ? tab : "overview";
     const ts_ = d.team_style || {};
     const mb_ = { badges: { home: { c: (ts_[m.Home] || {}).color, a: (ts_[m.Home] || {}).abbr }, away: { c: (ts_[m.Away] || {}).color, a: (ts_[m.Away] || {}).abbr } } };
@@ -688,7 +702,7 @@
     const coach = d.coach || {};
     app.innerHTML = `${backBar()}<section class="hero big">
         <p class="meta">${esc(m.Competition)}</p>
-        <p class="follow-row"><button class="btn follow ${fav.has("match:" + slug) ? "added" : ""}" data-fav="match:${esc(slug)}" data-follow-match="${esc(slug)}">☆ Follow this match</button></p>
+        ${held ? "" : `<p class="follow-row"><button class="btn follow ${fav.has("match:" + slug) ? "added" : ""}" data-fav="match:${esc(slug)}" data-follow-match="${esc(slug)}">☆ Follow this match</button></p>`}
         <div class="mhead">
           <button class="star ${fav.has("team:" + hs) ? "on" : ""}" data-fav="team:${esc(hs)}" aria-label="Favourite ${esc(H)}">★</button>
           <div class="mside">${badge(Object.assign({}, m, mb_), "home")}<b>${esc(H)}</b></div>
@@ -697,11 +711,11 @@
           <div class="mside">${badge(Object.assign({}, m, mb_), "away")}<b>${esc(A)}</b></div>
           <button class="star ${fav.has("team:" + as) ? "on" : ""}" data-fav="team:${esc(as)}" aria-label="Favourite ${esc(A)}">★</button>
         </div>
-        ${started ? `<p class="small muted prelab">Kwallo's chances before kick-off${L0 && L0.state === "in" ? " (live chances in the Overview tab)" : ""}</p>` : ""}
+        ${held ? heldNote(m.Competition) : `${started ? `<p class="small muted prelab">Kwallo's chances before kick-off${L0 && L0.state === "in" ? " (live chances in the Overview tab)" : ""}</p>` : ""}
         ${chanceBar(m, [H, A])}
         <div class="bar-legend num"><span><b>${pct(m.pH)}</b>${esc(H)}, fair ${odds(fairOf(m.pH))}</span><span><b>${pct(m.pD)}</b>Draw, fair ${odds(fairOf(m.pD))}</span>
           <span style="text-align:right"><b>${pct(m.pA)}</b>${esc(A)}, fair ${odds(fairOf(m.pA))}</span></div>
-        ${m.ExpHome != null ? `<p class="muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}.</p>` : ""}
+        ${m.ExpHome != null ? `<p class="muted">Expected goals: ${esc(H)} ${Number(m.ExpHome).toFixed(2)}, ${esc(A)} ${Number(m.ExpAway).toFixed(2)}.</p>` : ""}`}
       </section>
       <div id="tabanchor"></div>
       <div class="mstick"><div class="minibar" aria-hidden="true">${badge(Object.assign({}, m, mb_), "home")}<b class="mn">${esc(H)}</b>
@@ -945,7 +959,7 @@
     const linked = Object.values(perMatch).some(n => n > 1);
     const p = a.reduce((s, x) => s * (x.p || 0), 1);
     app.innerHTML = `<h1>Accumulator</h1>
-      ${a.length ? `<ul class="list">${a.map(x => `<li class="angle"><span><b>${esc(x.bet)}</b><br><a class="small" href="#/match/${esc(x.slug)}">${esc(x.match)}</a></span>
+      ${a.length ? `<ul class="list">${a.map(x => `<li class="angle"><span><b>${esc(x.bet)}</b><br><a class="small" href="${/^nba-/.test(x.slug) ? "#/bb/game/" : "#/match/"}${esc(x.slug)}">${esc(x.match)}</a></span>
           <span class="p num">${pct(x.p)}</span><span class="why"><button class="btn" data-acca="${esc(JSON.stringify(x))}">Remove</button></span></li>`).join("")}</ul>
         <section class="hero"><p class="muted">Combined chance</p><h1 class="num">${pct(p)}</h1><p>Fair odds for the accumulator: <b class="num">${odds(p > 0 ? 1 / p : null)}</b></p>
           ${linked ? `<p class="warn">Two or more picks come from the same match. Those outcomes are linked, so the combined chance above isn't reliable: keep one pick per match.</p>` : ""}
@@ -1178,6 +1192,151 @@
       <p>Match data comes from third-party sources and may occasionally be wrong or delayed.</p></div>`,
   };
 
+  // ---------- v37: basketball (the NBA). Its own files under bb/; chances only show once the weekly test lets them out (meta.gate)
+  const BB_FROM = "2026-10-01";
+  const sportSwitch = (cur, fb, bb) => `<div class="sport" role="tablist"><a role="tab" href="${fb}" class="${cur === "fb" ? "on" : ""}" aria-selected="${cur === "fb"}">⚽ Football</a>`
+    + `<a role="tab" href="${bb}" class="${cur === "bb" ? "on" : ""}" aria-selected="${cur === "bb"}">🏀 Basketball</a></div>`;
+  const bbBadges = g => ({ Home: g.home.name, Away: g.away.name, badges: { home: { c: g.home.color, a: g.home.abbr }, away: { c: g.away.color, a: g.away.abbr } } });
+  const bbRec = t => (t && t.record ? `${t.record[0]}–${t.record[1]}` : "");
+  const signed = x => (x == null || !isFinite(x) ? "–" : `${x > 0 ? "+" : ""}${Number(x).toFixed(1)}`);
+  const halfLine = x => (x == null ? "–" : `${x > 0 ? "+" : ""}${x}`);
+  const bbHeld = meta => `<p class="small muted">Kwallo's NBA chances are still being tested against last season and the bookmakers, so they stay hidden until the model is close enough to trust (${esc(((meta || {}).gate || {}).why || "not tested yet")}). Scores, standings and team form are live now.</p>`;
+  function bbState(g) {                                            // pre / in / post, the score and the detail, the Worker's live scores first
+    const L = LIVE[g.slug];
+    if (L && L.state && L.state !== "pre") return { state: L.state, hs: L.hs, as: L.as, detail: L.detail || (L.state === "post" ? "Final" : "Live") };
+    if (g.state && g.state !== "pre" && g.score) return { state: g.state, hs: g.score[0], as: g.score[1], detail: g.state === "post" ? "Final" : "Live" };
+    return { state: "pre" };
+  }
+  function bbRow(g, withDay) {                                     // withDay: the date above the time (lists that span several days)
+    const s = bbState(g), b = bbBadges(g), pub = g.published && g.pH != null;
+    const tip = g.tip ? new Date(g.tip).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "TBC";
+    const top = s.state === "in" ? `<b class="live">${esc(s.detail)}</b>` : s.state === "post" ? `<span class="muted">${esc(s.detail)}</span>`
+      : `<span>${withDay === true ? `<small class="muted">${esc(dayLabel(g.tip ? localDay(g.tip) : g.date))}</small><br>` : ""}${esc(tip)}</span>`;
+    const line = (side, t, p, sc, won) => `<span class="mt">${badge(b, side)}<span class="tn">${won ? `<b>${esc(t.name)}</b>` : esc(t.name)} <small class="muted num">${bbRec(t)}</small></span>`
+      + `${sc != null ? `<b class="msc">${sc}</b>` : pub ? `<span class="mp num">${pct(p)}</span>` : ""}</span>`;
+    const md = pub && s.state === "pre" ? `Kwallo: ${esc(g.home.short)} ${halfLine(g.fair_spread)}, total ${g.fair_total}` : (g.notes || [])[0] ? esc(g.notes[0]) : "";
+    return `<a class="mrow ${s.state === "in" ? "is-live" : ""}" href="#/bb/game/${esc(g.slug)}">
+      <span class="mtime num">${top}<span class="muted">${s.hs != null ? "" : "–"}</span></span>
+      <span class="mteams">${line("away", g.away, g.pA, s.hs != null ? s.as : null, s.state === "post" && s.as > s.hs)}${line("home", g.home, g.pH, s.hs != null ? s.hs : null, s.state === "post" && s.hs > s.as)}
+        ${md ? `<span class="md small muted">${md}</span>` : ""}</span><span></span></a>`;
+  }
+  async function pageBB(day) {
+    setNav("today");
+    const idx = await get("bb/index.json"), gs = idx.games || [];
+    const today = localDay(Date.now());
+    const past7 = [...Array(7)].map((_, i) => localDay(Date.now() - (7 - i) * 864e5));
+    const days = [...new Set([...past7, today, ...gs.map(g => g.date).filter(d => d >= today)])].filter(d => d >= BB_FROM).sort();
+    day = day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : today;
+    const max = days[days.length - 1] || today;
+    const dayTabs = (days.includes(day) ? days : [...days, day].sort()).map(d => `<button class="${d === day ? "on" : ""}" data-go="#/bb/day/${d}">${esc(dayLabel(d))}</button>`).join("");
+    const picker = `<label class="datepick" title="Pick a date">📅 <input type="date" data-datepick="bb" min="${BB_FROM}" max="${max}" value="${day}" aria-label="Pick a date"></label>`;
+    await getLive();
+    let list = gs.filter(g => g.date === day), past = null;
+    if (!list.length && day < today) {                              // older days: the results file (with Kwallo's pre-game chance where it was published)
+      try { past = await get(`bb/days/${day}.json`); } catch (e) {}
+    }
+    const pastRow = x => { const b = { Home: x.home, Away: x.away, badges: { home: { a: x.home_abbr }, away: { a: x.away_abbr } } };
+      const line = (side, name, sl, sc, won) => `<span class="mt">${badge(b, side)}<span class="tn"><a href="#/bb/team/${esc(sl)}">${won ? `<b>${esc(name)}</b>` : esc(name)}</a></span><b class="msc">${sc}</b></span>`;
+      return `<div class="mrow"><span class="mtime num"><span class="muted">Final</span></span><span class="mteams">${line("away", x.away, x.away_slug, x.as, x.as > x.hs)}${line("home", x.home, x.home_slug, x.hs, x.hs > x.as)}
+        ${x.pH != null ? `<span class="md small muted">Kwallo: ${esc(x.home)} ${pct(x.pH)} ${x.hit === true ? '<span class="won">✓</span>' : x.hit === false ? '<span class="lost">✗</span>' : ""}</span>` : ""}</span><span></span></div>`; };
+    const n = list.length || ((past || {}).games || []).length;
+    const body = list.length ? list.map(bbRow).join("") : past && (past.games || []).length ? past.games.map(pastRow).join("") : "";
+    const pub = (idx.meta || {}).gate && idx.meta.gate.pass;
+    app.innerHTML = `<div id="dayroot" hidden data-day="${day}" data-base="#/bb/day" data-min="${BB_FROM}" data-max="${max}"></div>
+      ${sportSwitch("bb", "#/", "#/bb")}
+      <h1>${esc(dayLabel(day))}</h1><p class="muted">${esc(longDate(day))}. ${n} NBA game${n === 1 ? "" : "s"}. Dates are US game nights; tip-off times are yours.</p>
+      <div class="daybar"><div class="tabs" role="tablist" data-daytabs>${dayTabs}</div>${picker}</div>
+      <p class="links"><a href="#/bb/standings">Standings</a></p>
+      <div class="swipez">${body ? compCard("bbday", "NBA", "USA", n, body, false) : empty(day < BB_FROM ? "Kwallo's NBA pages start with the 2026/27 season." : "No NBA games on this day.")}
+      ${pub ? `<p class="small muted">Chances are the model's; fair odds are the break-even price.</p>` : bbHeld(idx.meta)}
+      <p class="small muted">Updated ${idx.meta && idx.meta.updated ? esc(new Date(idx.meta.updated).toLocaleString()) : "recently"}.</p></div>`;
+    afterRender = () => dayTabsInView(day, false);
+    hit("bb_day");
+  }
+  async function pageBBGame(slug) {
+    setNav("today");
+    const g = await get(`bb/game/${slug}.json`);
+    let meta = null; try { meta = (await get("bb/index.json")).meta; } catch (e) {}
+    await getLive();
+    const s = bbState(g), b = bbBadges(g), H = g.home, A = g.away, pub = g.published && g.pH != null;
+    const tip = g.tip ? new Date(g.tip).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "Time to be confirmed";
+    const sel = (bet, p) => ({ id: selId(slug, bet), match: `${A.name} at ${H.name}`, slug, bet, p, fair: p > 0 ? 1 / p : null });
+    const side = (t, sd) => `<div class="mside">${badge(b, sd)}<a href="#/bb/team/${esc(t.slug)}"><b>${esc(t.name)}</b></a><span class="small muted num">${bbRec(t)}</span></div>`;
+    const formList = f => (f || []).map(x => `<li class="num small">${esc(x.date)}: ${x.venue === "H" ? "v" : "at"} ${esc(x.opp)} <b class="${x.result === "W" ? "won" : "lost"}">${x.result} ${esc(x.score)}</b></li>`).join("");
+    const inj = list => (list || []).length ? `<ul class="list">${list.map(p => `<li class="small">${esc(p.name)} <span class="muted">${esc(p.status)}</span></li>`).join("")}</ul>` : `<p class="small muted">Nobody on the injury report.</p>`;
+    const rt = t => t.rating || {};
+    let markets = "";
+    if (pub) {
+      const ml = cellRow([mcell(sel(`${A.name} to win`, g.pA), A.short, lean(g.pA, 2)), mcell(sel(`${H.name} to win`, g.pH), H.short, lean(g.pH, 2))], 2);
+      const sp = (g.spreads || []).map(x => `<span class="ol"><b class="num">${halfLine(x.line)}</b><small>${esc(H.short)}</small></span>${mcell(sel(`${H.name} ${halfLine(x.line)}`, x.home), null, lean(x.home, 2))}${mcell(sel(`${A.name} ${halfLine(-x.line)}`, x.away), null, lean(x.away, 2))}`).join("");
+      const tt = ouGrid((g.totals || []).map(x => [String(x.line), [], sel(`Over ${x.line} points`, x.over), sel(`Under ${x.line} points`, x.under)]));
+      markets = `<h2>Winner</h2>${ml}
+        <h2>Spread</h2><p class="small muted">Kwallo's fair line: ${esc(H.short)} ${halfLine(g.fair_spread)}. A minus line means that team must win by more than it.</p>
+        <div class="ougrid"><span></span><span class="oh">${esc(H.short)}</span><span class="oh">${esc(A.short)}</span>${sp}</div>
+        <h2>Total points</h2><p class="small muted">Kwallo's fair total: ${g.fair_total}.</p>${tt}`;
+    }
+    app.innerHTML = `${backBar().replace('href="#/"', 'href="#/bb"')}<section class="hero big">
+        <p class="meta">NBA · ${esc(tip)}</p>
+        <div class="mhead"><span></span>${side(A, "away")}
+          <div class="mcentre num">${s.state !== "pre" ? `<b class="score">${s.as}–${s.hs}</b><span class="${s.state === "in" ? "live" : "muted"}">${esc(s.detail)}</span>`
+            : `<b class="score">${g.tip ? esc(new Date(g.tip).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) : "TBC"}</b><span class="muted">${esc(dayLabel(g.tip ? localDay(g.tip) : g.date))}</span>`}</div>
+          ${side(H, "home")}<span></span></div>
+        ${pub ? `${s.state !== "pre" ? `<p class="small muted prelab">Kwallo's chances before tip-off</p>` : ""}${chanceBar({ pH: g.pA, pD: 0, pA: g.pH }, [A.name, H.name])}
+          <div class="bar-legend num"><span><b>${pct(g.pA)}</b>${esc(A.short)}, fair ${odds(g.fair.away)}</span><span style="text-align:right"><b>${pct(g.pH)}</b>${esc(H.short)}, fair ${odds(g.fair.home)}</span></div>
+          <p class="muted">Expected score: ${esc(A.short)} ${Math.round(g.pts[1])}, ${esc(H.short)} ${Math.round(g.pts[0])}.</p>` : bbHeld(meta)}
+      </section>
+      ${(g.notes || []).length ? `<p class="small">${g.notes.map(esc).join(". ")}.</p>` : ""}
+      ${markets}
+      <h2>Team ratings</h2><div class="wrap"><table><thead><tr><th></th><th class="r">${esc(A.short)}</th><th class="r">${esc(H.short)}</th></tr></thead><tbody>
+        <tr><td>Offence (points per 100 possessions, against average)</td><td class="r num">${signed(rt(A).off)}</td><td class="r num">${signed(rt(H).off)}</td></tr>
+        <tr><td>Defence (points kept out, against average)</td><td class="r num">${signed(rt(A).def)}</td><td class="r num">${signed(rt(H).def)}</td></tr>
+        <tr><td>Net rating</td><td class="r num"><b>${signed(rt(A).net)}</b></td><td class="r num"><b>${signed(rt(H).net)}</b></td></tr>
+        <tr><td>Rank of 30</td><td class="r num">${rt(A).rank || "–"}</td><td class="r num">${rt(H).rank || "–"}</td></tr></tbody></table></div>
+      <h2>Injury report</h2><h3>${esc(A.name)}</h3>${inj((g.injuries || {}).away)}<h3>${esc(H.name)}</h3>${inj((g.injuries || {}).home)}
+      <h2>Last 10 games</h2><h3>${esc(A.name)}</h3><ul class="list">${formList((g.form || {}).away) || "<li class='small muted'>No games yet this season.</li>"}</ul>
+        <h3>${esc(H.name)}</h3><ul class="list">${formList((g.form || {}).home) || "<li class='small muted'>No games yet this season.</li>"}</ul>
+      ${(g.h2h || []).length ? `<h2>This season's meetings</h2><ul class="list">${g.h2h.map(x => `<li class="num small">${esc(x.date)}: ${esc(x.away)} at ${esc(x.home)}, <b>${esc(x.score)}</b> (home first)</li>`).join("")}</ul>` : ""}`;
+    hit("bb_game");
+  }
+  async function pageBBTeam(slug) {
+    setNav("leagues");
+    const t = await get(`bb/team/${slug}.json`), r = t.rating || {};
+    let up = [];
+    try { const idx = await get("bb/index.json"); up = (idx.games || []).filter(g => (t.upcoming || []).includes(g.slug)); } catch (e) {}
+    await getLive();
+    app.innerHTML = `${backBar().replace('href="#/"', 'href="#/bb/standings"')}<section class="hero"><p class="meta">NBA · ${esc(t.conf)}ern Conference</p>
+        <h1>${esc(t.name)}</h1><p class="num">${t.W}–${t.L} this season. Net rating ${signed(r.net)} (${r.rank ? ordinal(r.rank) + " of 30" : "not rated yet"}).</p></section>
+      <div class="wrap"><table><tbody><tr><td>Offence (points per 100 possessions, against average)</td><td class="r num">${signed(r.off)}</td></tr>
+        <tr><td>Defence (points kept out, against average)</td><td class="r num">${signed(r.def)}</td></tr>
+        <tr><td>Pace (possessions per game)</td><td class="r num">${f1(r.pace)}</td></tr></tbody></table></div>
+      ${up.length ? `<h2>Next games</h2>${compCard("bbteam", "NBA", null, up.length, up.map(g => bbRow(g, true)).join(""), false)}` : ""}
+      <h2>Last 10 games</h2><ul class="list">${(t.last10 || []).map(x => `<li class="num small">${esc(x.date)}: ${x.venue === "H" ? "v" : "at"} ${esc(x.opp)} <b class="${x.result === "W" ? "won" : "lost"}">${x.result} ${esc(x.score)}</b></li>`).join("") || "<li class='small muted'>No games yet this season.</li>"}</ul>
+      <h2>Injury report</h2>${(t.injuries || []).length ? `<ul class="list">${t.injuries.map(p => `<li class="small">${esc(p.name)} <span class="muted">${esc(p.status)}</span></li>`).join("")}</ul>` : `<p class="small muted">Nobody on the injury report.</p>`}`;
+    hit("bb_team");
+  }
+  function bbTable(rows, n) {
+    return `<div class="wrap"><table><thead><tr><th>#</th><th>Team</th><th class="r">W</th><th class="r">L</th><th class="r">Pct</th><th class="r">GB</th><th class="r">Last 10</th><th class="r">Net</th></tr></thead><tbody>
+      ${rows.slice(0, n || rows.length).map(x => `<tr${x.pos === 7 || x.pos === 11 ? ' class="cut"' : ""}><td class="num">${x.pos}</td><td><a href="#/bb/team/${esc(x.slug)}">${esc(x.team)}</a></td><td class="r num">${x.W}</td><td class="r num">${x.L}</td>
+        <td class="r num">${x.pct == null ? "–" : x.pct.toFixed(3).replace(/^0/, "")}</td><td class="r num">${x.gb ? f1(x.gb) : "–"}</td><td class="r num">${(String(x.l10 || "").match(/W/g) || []).length}–${(String(x.l10 || "").match(/L/g) || []).length}</td><td class="r num">${signed(x.net)}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+  async function pageBBStandings() {
+    setNav("leagues");
+    const s = await get("bb/standings.json"), c = s.conferences || {};
+    app.innerHTML = `${backBar().replace('href="#/"', 'href="#/bb"')}${sportSwitch("bb", "#/leagues", "#/bb/leagues")}<h1>NBA standings</h1>
+      ${["East", "West"].map(k => `<h2>${k}ern Conference</h2>${bbTable(c[k] || [])}`).join("")}
+      <p class="small muted">The top 6 in each conference go straight to the playoffs; 7th to 10th play in the play-in. Net rating is Kwallo's: points per 100 possessions better than an average team.</p>`;
+    hit("bb_standings");
+  }
+  async function pageBBLeagues() {
+    setNav("leagues");
+    let s = null; try { s = await get("bb/standings.json"); } catch (e) {}
+    const c = (s || {}).conferences || {};
+    app.innerHTML = `${sportSwitch("bb", "#/leagues", "#/bb/leagues")}<h1>Leagues</h1><h2 class="grp">Basketball</h2>
+      ${compCard("lg:nba", "NBA", "USA", null, s ? `${["East", "West"].map(k => `<h3>${k}</h3>${bbTable(c[k] || [], 5)}`).join("")}<p class="links"><a href="#/bb/standings">Full standings</a> <a href="#/bb">Games</a></p>`
+        : empty("Not available yet."), false)}
+      <p class="small muted">More basketball leagues (EuroLeague first) are coming.</p>`;
+  }
+
   // ---------- router
   let afterRender = null;                                           // v35: a page's follow-up once it's on screen (the match page's tabs)
   // v35: on a match page, the slim scoreboard (badges, score or kick-off, the minute) appears in the pinned bar once the big one scrolls away
@@ -1194,6 +1353,8 @@
     afterRender = null;
     app = document.createElement("div");
     const parts = (location.hash.replace(/^#\/?/, "") || "").split("/").map(decodeURIComponent);
+    if (parts[0] === "bb") store.set("sport", "bb");                // v37c: remember the sport (the other pages keep the last one)
+    else if (["", "day", "leagues", "comp", "leaders", "match", "team", "player", "pf", "result", "angles"].includes(parts[0])) store.set("sport", "fb");
     if (!keepScroll) try { window.scrollTo(0, 0); } catch (e) {}
     try {
       switch (parts[0]) {
@@ -1212,6 +1373,13 @@
         case "track": await pageTrack(); break;
         case "fav": await pageFav(); break;
         case "more": pageMore(); break;
+        case "bb":                                                    // v37: basketball
+          if (parts[1] === "game") await pageBBGame(parts[2]);
+          else if (parts[1] === "team") await pageBBTeam(parts[2]);
+          else if (parts[1] === "standings") await pageBBStandings();
+          else if (parts[1] === "leagues") await pageBBLeagues();
+          else await pageBB(parts[1] === "day" ? parts[2] : null);
+          break;
         case "about": case "privacy": case "terms": setNav("more"); app.innerHTML = TEXT[parts[0]]; break;
         default: app.innerHTML = `<h1>Page not found</h1>${empty('That page doesn\'t exist. <a href="#/">Go to today\'s matches</a>.')}`;
       }
@@ -1294,7 +1462,7 @@
       store.set("leaders_sort2:" + el.dataset.leadersSort, [el.value, el.value === "minutes" || avg ? "total" : "p90", -1]); route(); hit("leaders_sort");
     }
     if (el.matches("[data-leaders-min]")) { store.set("leaders_min", Number(el.value)); route(); }
-    if (el.matches("[data-datepick]") && /^\d{4}-\d{2}-\d{2}$/.test(el.value)) { hit("date_picker"); location.hash = `#/day/${el.value}/all`; }   // v35
+    if (el.matches("[data-datepick]") && /^\d{4}-\d{2}-\d{2}$/.test(el.value)) { hit("date_picker"); location.hash = el.dataset.datepick === "bb" ? `#/bb/day/${el.value}` : `#/day/${el.value}/all`; }   // v35
   });
   document.querySelectorAll(".tg-channel").forEach(x => { if (C.channel) x.href = tg(C.channel); else x.remove(); });
   document.querySelectorAll(".tg-bot").forEach(x => { if (C.bot) x.href = tg(C.bot); else x.remove(); });
@@ -1314,7 +1482,8 @@
       if (mode === "day") {
         const dr = shell.querySelector("#dayroot"), dd = new Date(dr.dataset.day + "T12:00:00"); dd.setDate(dd.getDate() + dir);
         const nd = localDay(dd);
-        return nd >= PAST_FROM && nd <= dr.dataset.max ? { dir, day: nd, hash: `#/day/${nd}/${dr.dataset.filter || "all"}` } : null;
+        const bb = !!dr.dataset.base;                                  // v37: the NBA's days (no filters)
+        return nd >= (dr.dataset.min || PAST_FROM) && nd <= dr.dataset.max ? { dir, day: nd, bb, hash: bb ? `${dr.dataset.base}/${nd}` : `#/day/${nd}/${dr.dataset.filter || "all"}` } : null;
       }
       const tabs = [...shell.querySelectorAll(".mtabs a[data-k]")], cur = tabs.findIndex(a => a.classList.contains("on")), nx = cur + dir;
       return cur >= 0 && nx >= 0 && nx < tabs.length ? { dir, key: tabs[nx].dataset.k } : null;
@@ -1342,7 +1511,7 @@
       const dir = dx < 0 ? 1 : -1;                                    // finger moving left: the next day or tab
       if (!next || next.dir !== dir) {                                // start loading what's that way while the finger is still down
         next = target(dir);
-        if (next && next.day) warmDay(next.day);
+        if (next && next.day && !next.bb) warmDay(next.day);
         if (next && next.key) loadPane(next.key);
       }
       const pull = next ? dx : dx * 0.25;                             // nothing that way: it only gives a little
@@ -1380,7 +1549,7 @@
   window.addEventListener("hashchange", route);
   setInterval(async () => {
     const h = location.hash || "#/";
-    if (!(h === "#/" || h.startsWith("#/day/") || h.startsWith("#/fav") || h.startsWith("#/match/")) || document.hidden) return;
+    if (!(h === "#/" || h.startsWith("#/day/") || h.startsWith("#/fav") || h.startsWith("#/match/") || h === "#/bb" || h.startsWith("#/bb/day/") || h.startsWith("#/bb/game/")) || document.hidden) return;
     const before = JSON.stringify(LIVE); await getLive(true);
     if (JSON.stringify(LIVE) !== before) { const y = window.scrollY; await route(true); try { window.scrollTo(0, y); } catch (e) {} }
   }, 60000);

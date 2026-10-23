@@ -61,6 +61,45 @@ if RUN_BACKTEST:
     backtest = pd.concat([cache] + new_rows, ignore_index=True) if new_rows else cache
     backtest.to_csv(BT_PATH, index=False)
 
+    # ---------- v37c: the two seasons before this one, for the new leagues (for the league gate) ----------
+    # Replayed week by week like this season (only results from before each week), once per league and season, and kept, so later
+    # runs skip them. The full run only; a run that hits the time limit continues the next week. No player adjustment here: the
+    # lineup data for these leagues starts this season, so the older replays are, if anything, a little harsh on the model.
+    PAST_REPLAY_MINUTES = 40
+    BT_PAST_PATH = f"{SAVE_DIR}/backtest_past_v36leagues.csv"
+    past_bt = pd.read_csv(BT_PAST_PATH) if os.path.exists(BT_PAST_PATH) else pd.DataFrame(columns=["Competition", "ReplaySeason"])
+    past_done = set(zip(past_bt["Competition"], past_bt["ReplaySeason"].astype(str))) if len(past_bt) else set()
+    t_past, past_new = time.time(), []
+    for lg_ in sorted(NEW_LEAGUES_V36 if "NEW_LEAGUES_V36" in globals() else []):
+        info_ = SOLO.get(lg_)
+        if info_ is None or PAST_REPLAY_MINUTES <= 0:
+            continue
+        src_ = info_["data"]
+        seasons_ = sorted(s for s in src_["Season"].astype(str).unique() if s < str(info_["season"]))[-2:]
+        for s_ in seasons_:
+            if (lg_, s_) in past_done:
+                continue
+            if time.time() - t_past > PAST_REPLAY_MINUTES * 60:
+                break
+            test_ = src_[src_["Season"].astype(str) == s_]
+            rows_ = []
+            for w in sorted(pd.Timestamp(d) for d in week_start(test_["Date"]).unique()):
+                hist_ = src_[src_["Date"] < w]
+                if len(hist_) < 200:                                     # too little earlier data for a fair prediction
+                    continue
+                games = test_[(test_["Date"] >= w) & (test_["Date"] < w + pd.Timedelta(days=7))].copy()
+                t = predict_league(hist_, games, half_life=info_["half_life"], totals=info_.get("totals", False), quiet=True, adjust=no_adjust)
+                if t is not None:
+                    rows_.append(t.assign(Group=info_["group"], Week=w.strftime("%Y-%m-%d"), ReplaySeason=s_))
+            if rows_:
+                past_new += rows_
+            else:                                                        # nothing replayable (no earlier data): don't try again
+                past_new.append(pd.DataFrame({"Competition": [lg_], "ReplaySeason": [s_]}))
+            print(f"  past-season replay: {lg_} {s_}, {sum(len(r) for r in rows_)} matches")
+    if past_new:
+        past_bt = pd.concat([past_bt] + past_new, ignore_index=True)
+        past_bt.to_csv(BT_PAST_PATH, index=False)
+
     bt_scored, bt_table = scorecard(backtest)
     if bt_table is None:
         print("No finished matches this season yet.")
@@ -82,39 +121,57 @@ if RUN_BACKTEST:
         display(bt_comp)
 
         # ---------- v36: the league gate (applied in section 4 from the next run) ----------
-        # Each new league's replay of this season against a naive guess (its usual home / draw / away split in earlier seasons) and,
-        # where odds exist, the bookmakers. It passes with 60+ replayed matches, beating the naive guess by 0.01 or more and coming
-        # within 0.03 of the bookmakers (the five leagues without odds: the naive test only). Checked every run; a league can drop out.
+        # v37c: each new league's replay of this season AND the two before it (about 1,000 matches instead of 50-200, so luck matters
+        # far less). Where the league has bookmaker odds (40+ replayed matches with them), it passes by coming within 0.03 of the
+        # bookmakers: the harder test, and a fair one in very even leagues, where a naive guess can look good by luck. The five leagues
+        # without odds take the naive test (beat their usual home / draw / away split by 0.01). 60+ matches either way. Checked every
+        # run; a league can drop out.
+        past_scored = scorecard(past_bt.dropna(subset=["pH"]))[0] if len(past_bt) and "pH" in past_bt and past_bt["pH"].notna().any() else pd.DataFrame()
         gate_rows = []
         for lg_ in sorted(NEW_LEAGUES_V36 if "NEW_LEAGUES_V36" in globals() else []):
-            g_ = bt_scored[bt_scored["Competition"] == lg_]
             info_ = SOLO.get(lg_)
             if info_ is None:
                 continue
-            past_ = info_["data"][info_["data"]["Season"] != info_["season"]]
-            if len(g_) and len(past_) >= 100:
-                freq_ = np.bincount(outcome(past_), minlength=3) / len(past_)
-                naive_ = float(-np.log(np.clip(freq_[outcome(g_)], 1e-9, 1)).mean())
-            else:
-                naive_ = np.nan
+            cur_ = bt_scored[bt_scored["Competition"] == lg_].assign(ReplaySeason=str(info_["season"]))
+            old_ = past_scored[past_scored["Competition"] == lg_] if len(past_scored) else pd.DataFrame()
+            g_ = pd.concat([cur_, old_], ignore_index=True) if len(old_) else cur_
+            # naive guess for each match: the league's home / draw / away split in the seasons before that match's season
+            nv_ = pd.Series(np.nan, index=g_.index)
+            data_ = info_["data"]
+            for s_, gs_ in (g_.groupby(g_["ReplaySeason"].astype(str)) if len(g_) else []):
+                before_ = data_[data_["Season"].astype(str) < s_]
+                if len(before_) >= 100:
+                    freq_ = np.bincount(outcome(before_), minlength=3) / len(before_)
+                    nv_.loc[gs_.index] = -np.log(np.clip(freq_[outcome(gs_)], 1e-9, 1))
+            okn_ = nv_.notna()
+            naive_ = float(nv_[okn_].mean()) if okn_.any() else np.nan
+            model_n_ = float(g_.loc[okn_, "Model LL"].mean()) if okn_.any() else np.nan     # the model on the same matches
             o_ = g_["Bookie LL"].notna() if len(g_) else pd.Series(dtype=bool)
             model_ = float(g_["Model LL"].mean()) if len(g_) else np.nan
             gap_ = float((g_.loc[o_, "Model LL"] - g_.loc[o_, "Bookie LL"]).mean()) if len(g_) and o_.sum() >= 40 else np.nan
-            ok_ = (len(g_) >= 60 and np.isfinite(naive_) and model_ <= naive_ - 0.01
-                   and (lg_ in CHANCES_ONLY or (np.isfinite(gap_) and gap_ <= 0.03)))
-            why_ = ("passed" if ok_ else "fewer than 60 replayed matches" if len(g_) < 60 else "no earlier season to compare with" if not np.isfinite(naive_)
-                    else "not clearly better than the naive guess" if model_ > naive_ - 0.01 else "too few matches with odds" if not np.isfinite(gap_)
-                    else "too far behind the bookmakers")
+            by_book_ = lg_ not in CHANCES_ONLY and np.isfinite(gap_)
+            if len(g_) < 60:
+                ok_, why_ = False, "fewer than 60 replayed matches"
+            elif by_book_:
+                ok_ = gap_ <= 0.03
+                why_ = "passed" if ok_ else "too far behind the bookmakers"
+            elif not np.isfinite(naive_):
+                ok_, why_ = False, "no earlier season to compare with"
+            else:
+                ok_ = model_n_ <= naive_ - 0.01
+                why_ = "passed" if ok_ else "not clearly better than the naive guess"
             fin_ = lambda x: float(x) if np.isfinite(x) else None
-            LEAGUE_GATE[lg_] = {"pass": bool(ok_), "matches": int(len(g_)), "model": fin_(model_), "naive": fin_(naive_), "gap": fin_(gap_), "why": why_,
-                                "checked": TODAY.strftime("%Y-%m-%d")}
-            gate_rows.append({"League": lg_, "Matches": len(g_), "Model log loss": model_, "Naive log loss": naive_, "Gap to bookie": gap_, "Verdict": why_})
+            LEAGUE_GATE[lg_] = {"pass": bool(ok_), "matches": int(len(g_)), "this_season": int(len(cur_)), "model": fin_(model_), "naive": fin_(naive_),
+                                "gap": fin_(gap_), "test": "bookmakers" if by_book_ else "naive", "why": why_, "checked": TODAY.strftime("%Y-%m-%d")}
+            gate_rows.append({"League": lg_, "Matches": len(g_), "This season": len(cur_), "Model log loss": model_, "Naive log loss": naive_,
+                              "Gap to bookie": gap_, "Verdict": why_})
         if gate_rows:
             json.dump(LEAGUE_GATE, open(GATE_PATH, "w"))
-            print("\nLeague gate for the v36 leagues (decisions apply from the next run):")
+            print("\nLeague gate for the v36 leagues: this season and the two before (decisions apply from the next run):")
             display(pd.DataFrame(gate_rows).set_index("League").round(3))
             EXTRA_TABLES_EARLY = list(globals().get("EXTRA_TABLES_EARLY", [])) + [{"title": "League gate (new leagues)", "hint": "Each new league's replay of this "
-                                 "season: published once it beats a naive guess by 0.01 and comes within 0.03 of the bookmakers (log loss, lower is better), with 60+ matches.",
+                                 "season and the two before it: published once it comes within 0.03 of the bookmakers (leagues without odds: beats a naive guess by "
+                                 "0.01), with 60+ matches (log loss, lower is better). Until then its matches show without Kwallo's chances.",
                                  "rows": json.loads(pd.DataFrame(gate_rows).to_json(orient="records"))}]
 else:
     bt_scored, bt_table, bt_comp = None, None, None

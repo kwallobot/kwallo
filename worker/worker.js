@@ -85,7 +85,7 @@ async function handleUpdate(env, u) {
     const mm = arg.match(/^match_(.+)$/);                         // v33: one match only (alerts until full-time)
     if (mm) {
       const obj = await env.DATA.get("site/schedule.json");
-      const hit = obj ? (await obj.json()).find(x => x.slug === mm[1]) : null;
+      const hit = obj ? (await obj.json()).find(x => x.slug === mm[1] && !x.held) : null;
       if (!hit) return reply(env, chat, "That match isn't in the schedule any more. Try /follow with a team name instead.");
       await env.DB.prepare("INSERT OR IGNORE INTO subs (chat_id, kind, slug, name, created) VALUES (?, 'match', ?, ?, ?)")
         .bind(chat, hit.slug, `${hit.home} v ${hit.away}`, new Date().toISOString()).run();
@@ -337,7 +337,7 @@ async function liveTick(env, now = Date.now(), B = { left: 45 }) {
   const obj = await env.DATA.get("site/schedule.json");
   if (!obj) return "no schedule";
   const sched = await obj.json();
-  const live = sched.filter(m => m.espn && m.kickoff && now >= Date.parse(m.kickoff) - 5 * 60000 && now <= Date.parse(m.kickoff) + 150 * 60000);
+  const live = sched.filter(m => m.espn && m.kickoff && !m.held && now >= Date.parse(m.kickoff) - 5 * 60000 && now <= Date.parse(m.kickoff) + 150 * 60000);   // v37c: no alerts for held leagues
   let queued = 0;
   if (live.length) {
     const { by } = await followersBy(env);
@@ -423,7 +423,7 @@ async function lineupTick(env, now = Date.now(), B = { left: 10 }) {
   await ensureTables(env);
   const obj = await env.DATA.get("site/schedule.json");
   if (!obj) return "no schedule";
-  const soon = (await obj.json()).filter(m => m.espn && m.kickoff && Date.parse(m.kickoff) > now && Date.parse(m.kickoff) - now <= 80 * 60000);
+  const soon = (await obj.json()).filter(m => m.espn && m.kickoff && !m.held && Date.parse(m.kickoff) > now && Date.parse(m.kickoff) - now <= 80 * 60000);
   if (!soon.length) return "no kickoffs soon";
   const { by } = await followersBy(env);
   const cand = soon.map(m => ({ m, fans: fansOf(m, by) })).filter(x => x.fans.length);
@@ -453,20 +453,24 @@ async function lineupTick(env, now = Date.now(), B = { left: 10 }) {
 async function liveScores(env, now = Date.now()) {
   // matches that kicked off in the last 2.5 hours, or finished earlier today: { slug: {state, detail, hs, as} }
   const obj = await env.DATA.get("site/schedule.json");
-  if (!obj) return {};
-  const sched = await obj.json();
+  const sched = obj ? await obj.json() : [];
+  const bb = await env.DATA.get("site/bb/schedule.json");          // v37: NBA games too (their ESPN entries say "sport": "basketball")
+  if (bb) { try { sched.push(...(await bb.json())); } catch (e) {} }
+  if (!sched.length) return {};
   const today = new Date(now).toISOString().slice(0, 10);
-  const due = sched.filter(m => m.espn && m.kickoff && Date.parse(m.kickoff) <= now + 5 * 60000 && (now - Date.parse(m.kickoff) < 150 * 60000 || m.kickoff.slice(0, 10) === today));
+  const span = m => ((m.espn || {}).sport === "basketball" ? 200 : 150) * 60000;   // an NBA game lasts longer than a football match
+  const due = sched.filter(m => m.espn && m.kickoff && Date.parse(m.kickoff) <= now + 5 * 60000 && (now - Date.parse(m.kickoff) < span(m) || m.kickoff.slice(0, 10) === today));
   const out = {};
-  for (const code of [...new Set(due.map(m => m.espn.code))].slice(0, 25)) {
+  for (const key of [...new Set(due.map(m => `${m.espn.sport || "soccer"}/${m.espn.code}`))].slice(0, 25)) {
     let board = null;
-    try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/soccer/${code}/scoreboard`, { headers: { "user-agent": "Mozilla/5.0" } }); board = r.ok ? await r.json() : null; } catch (e) {}
-    for (const m of due.filter(x => x.espn.code === code)) {
+    try { const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${key}/scoreboard`, { headers: { "user-agent": "Mozilla/5.0" } }); board = r.ok ? await r.json() : null; } catch (e) {}
+    for (const m of due.filter(x => `${x.espn.sport || "soccer"}/${x.espn.code}` === key)) {
       const ev = ((board || {}).events || []).find(e => String(e.id) === String(m.espn.id));
       if (!ev) continue;
       const s = snapshot(ev);
       if (s.state === "pre") continue;
-      out[m.slug] = { state: s.state, detail: s.state === "post" ? "FT" : (/HALFTIME/i.test(s.name) ? "HT" : (s.detail || "")), hs: s.hs, as: s.as };
+      const bball = (m.espn || {}).sport === "basketball";
+      out[m.slug] = { state: s.state, detail: s.state === "post" ? (bball ? "Final" : "FT") : (/HALFTIME/i.test(s.name) ? (bball ? "Half" : "HT") : (s.detail || "")), hs: s.hs, as: s.as };
     }
   }
   // v35: competitions ESPN doesn't cover (the Egyptian Premier League): full-time scores from PitchAPI, which fills them in at full-time
@@ -541,7 +545,7 @@ async function maybeDispatch(env, now = Date.now()) {
   if (!obj) return "no schedule";
   const sched = await obj.json();
   const mins = m => (Date.parse(m.kickoff) - now) / 60000;
-  let due = sched.filter(m => m.kickoff && m.espn && mins(m) >= 50 && mins(m) < 65);
+  let due = sched.filter(m => m.kickoff && m.espn && !m.held && mins(m) >= 50 && mins(m) < 65);   // v37c: not for leagues shown without chances
   if (!due.length) return "nothing due";
   const comps = (env.LINEUP_COMPS ? String(env.LINEUP_COMPS).split(",").map(s => s.trim()) : HEADLINE);
   const subs = (await env.DB.prepare("SELECT kind, slug FROM subs").all()).results || [];

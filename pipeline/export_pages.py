@@ -389,7 +389,7 @@ def build(ns, data_dir, mode, write, slug, clean):
     n_files = 0
     # ---------- competitions: tables and matchdays ----------
     hidden_ = set(ns.get("GATE_HIDDEN") or [])                    # v36: new leagues still waiting for their backtest to pass
-    comps, comp_names = [], (set(m["Competition"] for m in matches) | set(season_of)) - hidden_
+    comps, comp_names = [], set(m["Competition"] for m in matches) | set(season_of)   # v37c: shown too, without chances ("held")
     for comp in sorted(comp_names):
         cs = slug(comp)
         cur = res[(res["League"] == comp) & (res["Season"] == season_of.get(comp, ""))] if len(res) else pd.DataFrame()
@@ -405,8 +405,9 @@ def build(ns, data_dir, mode, write, slug, clean):
         else:
             rounds, nxt = _rounds(cur, up, slug)
         n_files += write(f"site/comp/{cs}.json", clean({"name": comp, "slug": cs, "group": cal_group(comp), "season": season_of.get(comp), "table": table,
-                                                        "rounds": rounds, "current_round": nxt, "upcoming": [m["slug"] for m in up]}))
-        comps.append({"slug": cs, "name": comp, "group": cal_group(comp), "group_name": GROUP_NAMES.get(cal_group(comp)), "upcoming": len(up), "has_table": bool(table)})
+                                                        "rounds": rounds, "current_round": nxt, "upcoming": [m["slug"] for m in up], "held": comp in hidden_}))
+        comps.append({"slug": cs, "name": comp, "group": cal_group(comp), "group_name": GROUP_NAMES.get(cal_group(comp)), "upcoming": len(up), "has_table": bool(table),
+                      "held": comp in hidden_})
     comps.sort(key=lambda c: (GROUP_ORDER.index(c["group"]) if c["group"] in GROUP_ORDER else 9, -c["upcoming"], c["name"]))
     n_files += write("site/competitions.json", comps)
     n_files += _past_days(ns, data_dir, write, slug, clean, {c["name"] for c in comps})

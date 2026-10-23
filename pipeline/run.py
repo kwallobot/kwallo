@@ -26,6 +26,7 @@ QUICK = {   # settings switched for the quicker runs (exact text replacements in
     "time.time() - t0 > 8 * 60": "time.time() - t0 > 1 * 60",
     "TS_BACKFILL_MINUTES = 8": "TS_BACKFILL_MINUTES = 3",                 # v35
     "NEWS_RUN_MINUTES = 6": "NEWS_RUN_MINUTES = 3",                       # v35
+    "PAST_REPLAY_MINUTES = 40": "PAST_REPLAY_MINUTES = 0",                # v37c: past seasons for the league gate: full runs only
 }
 MODES = {
     "full": {},

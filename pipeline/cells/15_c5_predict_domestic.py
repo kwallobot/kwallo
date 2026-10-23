@@ -226,11 +226,15 @@ pred_dom = pd.concat(dom_preds, ignore_index=True) if dom_preds else pd.DataFram
 GATE_PATH = f"{SAVE_DIR}/league_gate.json"
 LEAGUE_GATE = json.load(open(GATE_PATH)) if os.path.exists(GATE_PATH) else {}
 GATE_HIDDEN = {lg_ for lg_ in (NEW_LEAGUES_V36 if "NEW_LEAGUES_V36" in globals() else set()) if not LEAGUE_GATE.get(lg_, {}).get("pass")}
+# v37c: the held leagues' fixtures go to the website without any chances (matches, results, lineups, stats), never to the channel,
+#       the bot's previews, the angles or the track record (they stay out of pred_dom)
+HELD_FIXTURES = pd.DataFrame()
 if len(pred_dom) and GATE_HIDDEN:
     held_ = pred_dom[pred_dom["Competition"].isin(GATE_HIDDEN)]
     pred_dom = pred_dom[~pred_dom["Competition"].isin(GATE_HIDDEN)].reset_index(drop=True)
+    HELD_FIXTURES = held_[[c for c in ("Competition", "Group", "Date", "Home", "Away") if c in held_]].reset_index(drop=True)
     if len(held_):
-        print(f"League gate: {len(held_)} fixtures held back in {held_['Competition'].nunique()} new leagues until their backtest passes "
+        print(f"League gate: {len(held_)} fixtures shown without chances in {held_['Competition'].nunique()} new leagues until their backtest passes "
               f"({', '.join(sorted(held_['Competition'].unique()))}).")
 passed_ = sorted(lg_ for lg_ in (NEW_LEAGUES_V36 if "NEW_LEAGUES_V36" in globals() else set()) if LEAGUE_GATE.get(lg_, {}).get("pass"))
 health("League gate (v36 leagues)", True, f"{len(passed_)} published" + (f": {', '.join(passed_)}" if passed_ else "") + f"; {len(GATE_HIDDEN)} waiting")

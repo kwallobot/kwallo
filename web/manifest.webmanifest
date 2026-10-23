@@ -15,7 +15,7 @@
     { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
-    { "name": "Today's matches", "short_name": "Today", "url": "/?source=app#/", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Matches", "short_name": "Matches", "url": "/?source=app#/", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
     { "name": "Best angles", "short_name": "Angles", "url": "/?source=app#/angles", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
     { "name": "Track record", "short_name": "Record", "url": "/?source=app#/track", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
   ]
