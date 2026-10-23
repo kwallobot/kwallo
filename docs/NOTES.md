@@ -2,6 +2,24 @@
 
 *Last updated: 23 October 2026 (v37d built: NBA box scores, quarters, plays, player pages, leaders; halves and quarters, rebound and assist props, live chances. v37c built: the league gate over three seasons, held leagues shown without chances, Matches / Games; v37b: NBA player ratings and the live record; v37: the NBA. v36 before it: the 22 leagues, the league gate, PlayerElo, the installable app and the live view).*
 
+### v37j (23 October 2026): NBA team ratings with real figures
+- **Rank of 30 fixed:** it used to rank every team in the last three seasons' data, so ranks such as 35 and 39 appeared. It now ranks only the 30 NBA teams (also in the standings).
+- **Pace fixed:** the displayed figure was about half the real one (baseline / 2), e.g. 55. It's now baseline + the team's term, giving 94.7–103.3 against a league average of 102.1. The predictions were never affected; they use the model directly.
+- **The Team ratings table** (game pages and team pages) now shows, with a **League** column:
+  - points per game and points allowed per game (this season)
+  - offence and defence in points per 100 possessions (Kwallo's rating, gap to average in brackets)
+  - net rating, pace and rank of 30
+
+  The league figures come from the last 12 months (per 100 possessions and pace) and from this season (per game).
+
+### v37i (23 October 2026): fix for half-by-half shots
+- **The bug:** the first real run (23 Oct) showed 1st- and 2nd-half shots and shots on target far too high, e.g. 1st-half shots on target expected 11.6. The cause was v37f's fallback, which counted shots from the stored shot-by-shot data for matches without PitchAPI's half figures. Off-target shots carry an xG-on-target value too, so nearly every unblocked shot counted as on target, and the shot counts ran about 1.5× high. The calibration tests passed anyway, because the model predicted the wrong numbers consistently.
+- **The fix:**
+  - Shots and shots on target by half now come only from PitchAPI's own half figures, which are exact (checked against finished matches). Matches without them have none until the re-read reaches them; 10,104 already had them.
+  - The half-shots tests and corrections saved before the fix are ignored (`halves_v` in `market_tests.json`), so those markets show as experimental and uncorrected until the next weekly run re-tests them.
+  - Corners, fouls and passes by half, and full-match passes, were never affected.
+- **Lesson:** check new markets' expected figures against real ones (a team's usual shots per half), not just calibration.
+
 ### v37h (23 October 2026): better props, every quarter and half, tests that include this season
 - **The tests now include this season.** Props, quarters and live chances are tuned on last season before 1 February and judged on every game after it, this season's included. So the verdicts move week by week as games come in. (Before, they replayed last season only and couldn't change.) A `model.json` from before this change is re-tested on the next run of either kind (`tests_v`).
 - **Quarters and halves are tested two ways:** each half of the data is judged with settings fitted on the other half. That gives 1,240 games judged instead of about 550, so the verdicts are much less noisy. The published settings are fitted on all games.

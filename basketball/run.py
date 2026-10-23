@@ -217,9 +217,31 @@ def main():
         for x in sg.itertuples():
             names[str(x.home_id)] = (x.home_name, x.home_abbr); names[str(x.away_id)] = (x.away_name, x.away_abbr)
         rt["name"], rt["abbr"] = rt["team_id"].map(lambda t: names.get(t, ("", ""))[0]), rt["team_id"].map(lambda t: names.get(t, ("", ""))[1])
-        rt["rank"] = rt["net"].rank(ascending=False, method="min").astype(int)
+        # v37j: ranked among the 30 NBA teams only (the ratings also hold other teams seen in the last three seasons' games)
+        nba_ids = {t_ for t_, (n_, a_) in names.items() if a_ in nba.TEAMS}
+        in_nba = rt["team_id"].isin(nba_ids)
+        rt["rank"] = np.nan
+        rt.loc[in_nba, "rank"] = rt.loc[in_nba, "net"].rank(ascending=False, method="min")
         rmap = rt.set_index("team_id").to_dict("index")
         cur = g[g["season"] == season]
+        # v37j: the figures behind the ratings: the league's points per 100 possessions and pace (the last 12 months), and each team's
+        #       points scored and allowed per game this season (with the league's)
+        yr_ = g[g["date"] >= today - pd.Timedelta(days=365)]
+        LEAGUE = {"eff": round(float(100 * (yr_["hs"] + yr_["as"]).sum() / (2 * yr_["poss"].sum())), 1) if len(yr_) else None,
+                  "pace": round(float(yr_["poss"].mean()), 1) if len(yr_) else None,
+                  "ppg": round(float((cur["hs"] + cur["as"]).sum() / (2 * len(cur))), 1) if len(cur) else None}
+        def per_game(tid):
+            h_, a_ = cur[cur["home_id"] == tid], cur[cur["away_id"] == tid]
+            n_ = len(h_) + len(a_)
+            if not n_:
+                return {"gp": 0, "ppg": None, "papg": None}
+            return {"gp": n_, "ppg": round(float((h_["hs"].sum() + a_["as"].sum()) / n_), 1), "papg": round(float((h_["as"].sum() + a_["hs"].sum()) / n_), 1)}
+        def rating_of(tid):
+            r_ = rmap.get(tid, {})
+            off_, def_ = r_.get("off"), r_.get("def")
+            return {"off": off_, "def": def_, "net": r_.get("net"), "rank": int(r_["rank"]) if pd.notna(r_.get("rank")) else None, "pace": r_.get("pace"),
+                    "off_abs": LEAGUE["eff"] + off_ if off_ is not None and LEAGUE["eff"] else None,
+                    "def_abs": LEAGUE["eff"] - def_ if def_ is not None and LEAGUE["eff"] else None, **per_game(tid)}
         def last10(tid):
             rows = cur[(cur["home_id"] == tid) | (cur["away_id"] == tid)].tail(10)
             return [{"date": r.date.strftime("%Y-%m-%d"), "opp": r.away_name if r.home_id == tid else r.home_name, "venue": "H" if r.home_id == tid else "A",
@@ -236,8 +258,9 @@ def main():
             e = {"slug": gslug, "tip": x.tip, "date": x.day.strftime("%Y-%m-%d"), "home": H, "away": A, "espn": {"code": "nba", "id": str(x.game_id), "sport": "basketball"},
                  "state": x.state, "score": [x.home_score, x.away_score] if x.state != "pre" else None, "published": bool(gate["pass"])}
             for s, t in (("home", H), ("away", A)):
-                t["record"] = record(t["id"]); r_ = rmap.get(t["id"], {})
-                t["rating"] = {"off": r_.get("off"), "def": r_.get("def"), "net": r_.get("net"), "rank": r_.get("rank")}
+                t["record"] = record(t["id"])
+                t["rating"] = rating_of(t["id"])
+            e["league"] = LEAGUE
             notes = []
             f_ = sf.loc[x.game_id] if x.game_id in sf.index else None
             for s, t in (("home", H), ("away", A)):
@@ -280,7 +303,7 @@ def main():
             w, l = record(tid); r_ = rmap.get(tid, {})
             l10 = last10(tid)
             stand[nba.TEAMS[ab][0]].append({"team": nm, "abbr": ab, "slug": slug(nm), "W": w, "L": l, "pct": w / (w + l) if w + l else None,
-                                            "l10": "".join(x["result"] for x in l10[::-1]), "net": r_.get("net"), "off": r_.get("off"), "def": r_.get("def"), "rank": r_.get("rank")})
+                                            "l10": "".join(x["result"] for x in l10[::-1]), "net": r_.get("net"), "off": r_.get("off"), "def": r_.get("def"), "rank": rating_of(tid)["rank"]})
         for conf in stand:
             stand[conf].sort(key=lambda r: (-(r["pct"] if r["pct"] is not None else 0.5), -r["W"], r["team"]))   # no games yet: between 1-0 and 0-1
             lead = stand[conf][0] if stand[conf] else None
@@ -293,7 +316,7 @@ def main():
                 continue
             w, l = record(tid); r_ = rmap.get(tid, {})
             files[f"site/bb/team/{slug(nm)}.json"] = {"name": nm, "abbr": ab, "slug": slug(nm), "conf": nba.TEAMS[ab][0], "W": w, "L": l,
-                                                      "rating": {"off": r_.get("off"), "def": r_.get("def"), "net": r_.get("net"), "rank": r_.get("rank"), "pace": r_.get("pace")},
+                                                      "rating": rating_of(tid), "league": LEAGUE,
                                                       "last10": last10(tid), "upcoming": [e["slug"] for e in games_out if tid in (e["home"]["id"], e["away"]["id"]) and e["state"] == "pre"],
                                                       "injuries": [{"name": p["name"], "status": p["status"]} for p in out_by_team.get(tid, []) if p["minutes"] >= 10]}
         # ---- v37d: player pages (this season's averages, last season's for comparison, the last 10 games), team rosters, leaders

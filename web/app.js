@@ -1206,6 +1206,25 @@
   const bbRec = t => (t && t.record ? `${t.record[0]}–${t.record[1]}` : "");
   const signed = x => (x == null || !isFinite(x) ? "–" : `${x > 0 ? "+" : ""}${Number(x).toFixed(1)}`);
   const halfLine = x => (x == null ? "–" : `${x > 0 ? "+" : ""}${x}`);
+  // v37j: team ratings with the actual figures beside them: points per game this season, Kwallo's points per 100 possessions (scored
+  //       and allowed, the gap to average in brackets), net rating, pace and rank, and the league's average for each
+  function bbRatingsTable(cols, lg) {
+    lg = lg || {};
+    const val = (x, d) => (x == null || !isFinite(x) ? "–" : Number(x).toFixed(d == null ? 1 : d));
+    const withGap = (abs, gap) => abs != null ? `${val(abs)} <small class="muted">(${signed(gap)})</small>` : signed(gap);
+    const gp = Math.max(0, ...cols.map(([, r]) => (r || {}).gp || 0));
+    const rows = [
+      [`Points per game <small class="muted">(this season${gp ? `, ${gp} game${gp === 1 ? "" : "s"}` : ""})</small>`, r => val(r.ppg), val(lg.ppg)],
+      ["Points allowed per game", r => val(r.papg), val(lg.ppg)],
+      [`Offence: points per 100 possessions <small class="muted">(gap to average)</small>`, r => withGap(r.off_abs, r.off), val(lg.eff)],
+      [`Defence: points allowed per 100 possessions <small class="muted">(points kept out)</small>`, r => withGap(r.def_abs, r.def), val(lg.eff)],
+      ["Net rating", r => `<b>${signed(r.net)}</b>`, "0.0"],
+      ["Pace (possessions per game)", r => val(r.pace), val(lg.pace)],
+      ["Rank of 30", r => (r.rank || "–"), ""]];
+    return `<div class="wrap"><table class="ratings"><thead><tr><th></th>${cols.map(([n]) => `<th class="r">${esc(n)}</th>`).join("")}<th class="r muted">League</th></tr></thead><tbody>
+      ${rows.map(([lab, f, l]) => `<tr><td>${lab}</td>${cols.map(([, r]) => `<td class="r num">${f(r || {})}</td>`).join("")}<td class="r num muted">${l}</td></tr>`).join("")}</tbody></table></div>
+      <p class="small muted">Per game: what happened this season. Per 100 possessions: Kwallo's ratings (last season too, older games fading), which the predictions use.</p>`;
+  }
   const bbHeld = meta => `<p class="small muted">Kwallo's NBA chances are still being tested against last season and the bookmakers, so they stay hidden until the model is close enough to trust (${esc(((meta || {}).gate || {}).why || "not tested yet")}). Scores, standings and team form are live now.</p>`;
   function bbState(g) {                                            // pre / in / post, the score and the detail, the Worker's live scores first
     const L = LIVE[g.slug];
@@ -1419,11 +1438,7 @@
             <span class="muted">(${r.start[1]}–${r.start[0]} to ${r.to.a}–${r.to.h})</span></li>`).join("")}</ul>` : ""}
         ${G ? bbChart(G, chanceOf) : ""}
         ${(g.notes || []).length ? `<p class="small">${g.notes.map(esc).join(". ")}.</p>` : ""}
-        ${H.rating ? `<h2>Team ratings</h2><div class="wrap"><table><thead><tr><th></th><th class="r">${esc(A.short)}</th><th class="r">${esc(H.short)}</th></tr></thead><tbody>
-          <tr><td>Offence (points per 100 possessions, against average)</td><td class="r num">${signed(rt(A).off)}</td><td class="r num">${signed(rt(H).off)}</td></tr>
-          <tr><td>Defence (points kept out, against average)</td><td class="r num">${signed(rt(A).def)}</td><td class="r num">${signed(rt(H).def)}</td></tr>
-          <tr><td>Net rating</td><td class="r num"><b>${signed(rt(A).net)}</b></td><td class="r num"><b>${signed(rt(H).net)}</b></td></tr>
-          <tr><td>Rank of 30</td><td class="r num">${rt(A).rank || "–"}</td><td class="r num">${rt(H).rank || "–"}</td></tr></tbody></table></div>` : ""}
+        ${H.rating ? `<h2>Team ratings</h2>${bbRatingsTable([[A.short, rt(A)], [H.short, rt(H)]], g.league)}` : ""}
         ${g.injuries ? `<h2>Injury report</h2><h3>${esc(A.name)}</h3>${inj(g.injuries.away)}<h3>${esc(H.name)}</h3>${inj(g.injuries.home)}` : ""}
         ${g.form ? `<h2>Last 10 games</h2><h3>${esc(A.name)}</h3><ul class="list">${formList(g.form.away) || "<li class='small muted'>No games yet this season.</li>"}</ul>
           <h3>${esc(H.name)}</h3><ul class="list">${formList(g.form.home) || "<li class='small muted'>No games yet this season.</li>"}</ul>` : ""}
@@ -1487,9 +1502,7 @@
     await getLive();
     app.innerHTML = `${backBar().replace('href="#/"', 'href="#/bb/standings"')}<section class="hero"><p class="meta">NBA · ${esc(t.conf)}ern Conference</p>
         <h1>${esc(t.name)}</h1><p class="num">${t.W}–${t.L} this season. Net rating ${signed(r.net)} (${r.rank ? ordinal(r.rank) + " of 30" : "not rated yet"}).</p></section>
-      <div class="wrap"><table><tbody><tr><td>Offence (points per 100 possessions, against average)</td><td class="r num">${signed(r.off)}</td></tr>
-        <tr><td>Defence (points kept out, against average)</td><td class="r num">${signed(r.def)}</td></tr>
-        <tr><td>Pace (possessions per game)</td><td class="r num">${f1(r.pace)}</td></tr></tbody></table></div>
+      ${bbRatingsTable([[t.abbr || t.name, r]], t.league)}
       ${up.length ? `<h2>Next games</h2>${compCard("bbteam", "NBA", null, up.length, up.map(g => bbRow(g, true)).join(""), false)}` : ""}
       ${(t.roster || []).length ? `<h2>Players</h2><div class="wrap"><table class="box" data-sortable><thead><tr><th>Player</th>${["GP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "3PM", "FG%", "3P%", "FT%"].map((h, i) => `<th class="r" data-tsort="${i + 1}">${h}</th>`).join("")}</tr></thead><tbody>
         ${t.roster.map(p => `<tr><td class="pname"><a href="#/bb/player/${esc(p.slug)}">${esc(p.name)}</a> <small class="muted">${esc(p.pos || "")}</small>${p.injury ? ` <small class="warn">${esc(p.injury)}</small>` : ""}</td>

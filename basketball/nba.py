@@ -589,7 +589,9 @@ def ratings_table(model):
     k, teams = model["k"], model["teams"]
     c = model["eff"].coef_
     pc = model["pace"].coef_
-    return pd.DataFrame({"team_id": teams, "off": c[:k], "def": -c[k:2 * k], "pace": pc + model["pace"].intercept_ / 2}).assign(net=lambda d: d["off"] + d["def"])
+    # a game's possessions = baseline + both teams' pace terms, so a team's pace against an average side is baseline + its own term
+    # (v37j: was baseline / 2, which showed about half the real figure)
+    return pd.DataFrame({"team_id": teams, "off": c[:k], "def": -c[k:2 * k], "pace": pc + model["pace"].intercept_}).assign(net=lambda d: d["off"] + d["def"])
 
 
 # ---------------------------------------------------------------- replays (backtest), the adjustment tests and the gate
