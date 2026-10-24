@@ -1,7 +1,7 @@
 name: Daily refresh
 on:
   schedule:
-    - cron: "0 5 * * 0,2-6"    # every day except Monday, 05:00 UTC (06:00 in Lagos)
+    - cron: "0 4 * * 0,2-6"    # every day except Monday, 04:00 UTC (05:00 in Lagos; v36: an hour earlier)
   workflow_dispatch: {}        # also startable by hand from the Actions tab
 concurrency: { group: pitchlab, cancel-in-progress: false }
 jobs:
@@ -23,6 +23,8 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           BSD_KEY: ${{ secrets.BSD_KEY }}
           PITCHAPI_KEY: ${{ secrets.PITCHAPI_KEY }}
+          PLAYERELO_KEY: ${{ secrets.PLAYERELO_KEY }}                  # v36: the PlayerElo experiment (weekly, full run)
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}           # v35: team news (optional)
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           WORKER_URL: ${{ secrets.WORKER_URL }}
           PIPELINE_KEY: ${{ secrets.PIPELINE_KEY }}
