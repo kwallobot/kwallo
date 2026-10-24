@@ -7,7 +7,7 @@ concurrency: { group: pitchlab, cancel-in-progress: false }
 jobs:
   run:
     runs-on: ubuntu-24.04
-    timeout-minutes: 330
+    timeout-minutes: 350        # v36: GitHub stops any run at 360; the runner skips optional sections after 280 minutes
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -23,6 +23,8 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           BSD_KEY: ${{ secrets.BSD_KEY }}
           PITCHAPI_KEY: ${{ secrets.PITCHAPI_KEY }}
+          PLAYERELO_KEY: ${{ secrets.PLAYERELO_KEY }}                  # v36: the PlayerElo experiment (weekly, full run)
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}           # v35: team news (optional)
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           WORKER_URL: ${{ secrets.WORKER_URL }}
           PIPELINE_KEY: ${{ secrets.PIPELINE_KEY }}
