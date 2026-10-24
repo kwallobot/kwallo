@@ -1,6 +1,6 @@
 name: Lineup-time run
 on:
-  workflow_dispatch: {}        # started by the Cloudflare Worker about 70 minutes before kickoffs (and by hand if you like)
+  workflow_dispatch: {}        # started by the Cloudflare Worker about 60 minutes before followed or headline kickoffs (and by hand if you like)
 concurrency: { group: pitchlab, cancel-in-progress: false }
 jobs:
   run:
@@ -21,6 +21,8 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           BSD_KEY: ${{ secrets.BSD_KEY }}
           PITCHAPI_KEY: ${{ secrets.PITCHAPI_KEY }}
+          PLAYERELO_KEY: ${{ secrets.PLAYERELO_KEY }}                  # v36: the PlayerElo experiment (weekly, full run)
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}           # v35: team news (optional)
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           WORKER_URL: ${{ secrets.WORKER_URL }}
           PIPELINE_KEY: ${{ secrets.PIPELINE_KEY }}
